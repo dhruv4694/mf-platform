@@ -1,0 +1,140 @@
+# compose.dev.yml — Development environment
+#
+# START: docker compose -f compose.dev.yml up -d
+# STOP:  docker compose -f compose.dev.yml down
+#
+# WHAT THIS DOES:
+#   - PostgreSQL + MailHog + Redis run in containers (infrastructure)
+#   - Spring Boot app runs in a container with YOUR ./src mounted in
+#   - React frontend runs in a container with YOUR ./src mounted in
+#   - Edit any .java or .jsx file on your machine → container sees it instantly
+#   - Spring DevTools restarts the app automatically
+#   - Vite HMR pushes changes to your browser without reload
+#
+# REBUILD THE APP IMAGE (only needed when pom.xml or package.json changes):
+#   docker compose -f compose.dev.yml build app
+#   docker compose -f compose.dev.yml build frontend
+#   docker compose -f compose.dev.yml up -d
+#
+# NORMAL DEVELOPMENT (no rebuild needed, just restart):
+#   docker compose -f compose.dev.yml up -d
+
+version: "3.8"
+
+services:
+
+  # ─── PostgreSQL ─────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: mf-dev-postgres
+    environment:
+      POSTGRES_DB:       mf_platform
+      POSTGRES_USER:     mf_user
+      POSTGRES_PASSWORD: mf_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - mf-dev-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mf_user -d mf_platform"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ─── MailHog ────────────────────────────────────────────────────────────────
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: mf-dev-mailhog
+    ports:
+      - "1025:1025"   # SMTP
+      - "8025:8025"   # Web UI → http://localhost:8025
+
+  # ─── Redis ──────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: mf-dev-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ─── Spring Boot app ────────────────────────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev   # ← dev image (JDK + deps, no source)
+    container_name: mf-dev-app
+    ports:
+      - "8080:8080"
+
+    volumes:
+      # THE KEY LINE — bind mount your local ./src into the container.
+      # When you save InvestorService.java on your machine, the container
+      # immediately sees the change. Spring DevTools restarts the app.
+      - ./src:/app/src
+
+      # Maven cache volume — persists the ~/.m2 repository between restarts.
+      # Without this, Maven re-downloads dependencies every time the container
+      # restarts (not every build — every container restart).
+      # With this volume, downloaded jars survive container restarts.
+      - mf-dev-maven-cache:/root/.m2
+
+    environment:
+      SPRING_DATASOURCE_URL:      jdbc:postgresql://postgres:5432/mf_platform
+      SPRING_DATASOURCE_USERNAME: mf_user
+      SPRING_DATASOURCE_PASSWORD: mf_password
+      SPRING_DATA_REDIS_HOST:     redis
+      SPRING_DATA_REDIS_PORT:     6379
+      MAIL_HOST:                  mailhog
+      MAIL_PORT:                  1025
+      SPRING_PROFILES_ACTIVE:     dev
+      JWT_SECRET:                 dev-secret-key-not-for-production-min-32-chars
+      SEED_ADMIN_USERNAME:        admin
+      SEED_ADMIN_PASSWORD:        ChangeMe123!
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mailhog:
+        condition: service_started
+      redis:
+        condition: service_healthy
+
+  # ─── React frontend ──────────────────────────────────────────────────────────
+  frontend:
+    build:
+      # mf-platform-frontend is a sibling of this repo's parent directory, not
+      # nested inside it (matches compose.prod.yml's context path).
+      context: ../../mf-platform-frontend/mf-platform-frontend
+      dockerfile: Dockerfile.dev   # ← dev image (node_modules baked in)
+    container_name: mf-dev-frontend
+    ports:
+      - "5173:5173"   # Vite dev server (same port as npm run dev locally)
+
+    environment:
+      # Tells Vite's proxy where to find the Spring Boot app.
+      # Inside Docker, containers talk to each other by service name —
+      # "app" resolves to the Spring Boot container's internal IP.
+      # Without this, Vite would proxy to localhost:8080 which is the
+      # frontend container itself (not the app container) → 502 errors.
+      VITE_API_URL: http://app:8080
+
+    volumes:
+      # Bind mount only the source — NOT node_modules or config files.
+      # The image's node_modules stays intact.
+      # Edit any .jsx file on your machine → Vite HMR updates the browser.
+      - ../../mf-platform-frontend/mf-platform-frontend/src:/app/src
+      - ../../mf-platform-frontend/mf-platform-frontend/index.html:/app/index.html
+      - ../../mf-platform-frontend/mf-platform-frontend/vite.config.js:/app/vite.config.js
+
+    depends_on:
+      - app
+
+volumes:
+  mf-dev-postgres-data:
+    name: mf-dev-postgres-data
+  mf-dev-maven-cache:
+    name: mf-dev-maven-cache     # persists ~/.m2 between container restarts

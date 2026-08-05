@@ -1,0 +1,105 @@
+# compose.prod.yml — Production / full-stack environment
+#
+# START: docker compose -f compose.prod.yml up -d --build
+# STOP:  docker compose -f compose.prod.yml down
+#
+# WHAT THIS DOES:
+#   - Builds immutable JAR and nginx images (multi-stage builds)
+#   - No source code in containers — only the compiled artifact
+#   - No bind mounts — images are fully self-contained
+#   - Environment variables come from a .env file or shell environment
+#
+# ENVIRONMENT VARIABLES:
+# Create a .env file next to compose.prod.yml (never commit this to git):
+#   JWT_SECRET=your-production-secret-min-32-characters
+#   SEED_ADMIN_PASSWORD=YourSecureAdminPassword123!
+#   DB_PASSWORD=YourSecureDBPassword!
+#
+# Or set them in your shell / CI environment before running docker compose.
+
+version: "3.8"
+
+services:
+
+  # ─── PostgreSQL ─────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: mf-prod-postgres
+    environment:
+      POSTGRES_DB:       mf_platform
+      POSTGRES_USER:     mf_user
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+    volumes:
+      - mf-prod-postgres-data:/var/lib/postgresql/data
+    # No port exposed — only the app container can reach it (internal Docker network)
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mf_user -d mf_platform"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ─── Redis ──────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: mf-prod-redis
+    # No port exposed — internal only
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # ─── MailHog (dev tool — remove in real production, use SendGrid/SES) ───────
+  # Keep for demo/portfolio purposes so welcome emails work out of the box
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: mf-prod-mailhog
+    ports:
+      - "8025:8025"   # Web UI — remove or password-protect in real production
+    restart: unless-stopped
+
+  # ─── Spring Boot app ────────────────────────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile       # ← prod multi-stage image (JRE + JAR only)
+    container_name: mf-prod-app
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_DATASOURCE_URL:      jdbc:postgresql://postgres:5432/mf_platform
+      SPRING_DATASOURCE_USERNAME: mf_user
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD}
+      SPRING_DATA_REDIS_HOST:     redis
+      SPRING_DATA_REDIS_PORT:     6379
+      MAIL_HOST:                  mailhog
+      MAIL_PORT:                  1025
+      JWT_SECRET:                 ${JWT_SECRET:?JWT_SECRET is required}
+      SEED_ADMIN_USERNAME:        ${SEED_ADMIN_USERNAME:-admin}
+      SEED_ADMIN_PASSWORD:        ${SEED_ADMIN_PASSWORD:?SEED_ADMIN_PASSWORD is required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mailhog:
+        condition: service_started
+    restart: unless-stopped
+
+  # ─── React frontend (nginx) ──────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ../../mf-platform-frontend/mf-platform-frontend
+      dockerfile: Dockerfile       # ← prod multi-stage image (nginx + dist/ only)
+    container_name: mf-prod-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  mf-prod-postgres-data:
+    name: mf-prod-postgres-data

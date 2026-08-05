@@ -1,0 +1,156 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  logback-spring.xml — Spring Boot's preferred Logback config file.
+  (logback-spring.xml is loaded by Spring Boot before the application context,
+   which allows Spring Boot's Profile-based configuration to work correctly.
+   Use this instead of plain logback.xml.)
+
+  LOG FILES:
+    logs/app.log     — application log (INFO+), rolled daily, kept 14 days
+    logs/audit.log   — audit events only, rolled daily, kept 90 days
+
+  CONSOLE:
+    All log levels in development. In production, set LOG_LEVEL=WARN
+    to reduce console noise (app.log captures everything anyway).
+-->
+<configuration>
+
+    <!-- ─── Properties ──────────────────────────────────────────────────── -->
+    <property name="LOG_DIR"          value="logs" />
+    <property name="APP_LOG_FILE"     value="${LOG_DIR}/app.log" />
+    <property name="AUDIT_LOG_FILE"   value="${LOG_DIR}/audit.log" />
+    <property name="APP_RETENTION"    value="14" />  <!-- days to keep app logs -->
+    <property name="AUDIT_RETENTION"  value="90" />  <!-- days to keep audit logs -->
+    <property name="MAX_FILE_SIZE"    value="10MB" /> <!-- force rotate before daily if large -->
+
+    <!--
+      Log pattern explanation:
+        %d{...}    — timestamp
+        %-5level   — log level, left-padded to 5 chars (INFO , WARN , ERROR)
+        %thread    — thread name (useful for async/scheduled tasks)
+        %logger{36}— logger name, truncated to 36 chars
+        %msg       — the log message
+        %n         — newline
+    -->
+    <property name="APP_PATTERN"
+              value="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n" />
+
+    <!--
+      Audit log pattern: minimal — the message IS the structured JSON entry.
+      We only add a timestamp prefix for quick scanning without parsing the JSON.
+    -->
+    <property name="AUDIT_PATTERN" value="%d{yyyy-MM-dd HH:mm:ss.SSS} %msg%n" />
+
+
+    <!-- ─── Console appender ─────────────────────────────────────────────── -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>${APP_PATTERN}</pattern>
+        </encoder>
+    </appender>
+
+
+    <!-- ─── Application rolling file appender ────────────────────────────── -->
+    <!--
+      RollingFileAppender writes to logs/app.log.
+      TimeBasedRollingPolicy rolls the file daily:
+        - At midnight, current file is renamed to app.2026-07-13.log
+        - A new app.log starts for the new day
+        - Files older than APP_RETENTION days are deleted automatically
+      SizeAndTimeBasedRollingPolicy adds a size limit:
+        - If app.log hits 10MB before midnight, it's rolled immediately
+        - Filename pattern uses %i for the within-day rotation index
+    -->
+    <appender name="APP_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${APP_LOG_FILE}</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <!-- Pattern for rotated files -->
+            <fileNamePattern>${LOG_DIR}/app.%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+            <!-- Maximum size of a single file before forced rotation -->
+            <maxFileSize>${MAX_FILE_SIZE}</maxFileSize>
+            <!-- Number of days to keep rotated files -->
+            <maxHistory>${APP_RETENTION}</maxHistory>
+            <!-- Total size cap across all rotated files -->
+            <totalSizeCap>500MB</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>${APP_PATTERN}</pattern>
+        </encoder>
+    </appender>
+
+
+    <!-- ─── Audit rolling file appender ──────────────────────────────────── -->
+    <!--
+      Identical rolling mechanism but with:
+        - Separate file: logs/audit.log
+        - Longer retention: 90 days (3 months of audit history)
+        - Minimal pattern: the JSON message IS the entry
+        - additivity=false on the AUDIT logger (see below) means ONLY
+          this appender receives audit messages — they don't also appear
+          in the app log or console
+    -->
+    <appender name="AUDIT_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${AUDIT_LOG_FILE}</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_DIR}/audit.%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+            <maxFileSize>${MAX_FILE_SIZE}</maxFileSize>
+            <maxHistory>${AUDIT_RETENTION}</maxHistory>
+            <totalSizeCap>200MB</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>${AUDIT_PATTERN}</pattern>
+        </encoder>
+    </appender>
+
+
+    <!-- ─── Logger configuration ─────────────────────────────────────────── -->
+
+    <!--
+      AUDIT logger — routes to audit file ONLY.
+
+      additivity="false" is critical:
+        - By default, a logger's output propagates UP to parent loggers
+          (the root logger in this case)
+        - With additivity=false, audit entries go to AUDIT_FILE and nowhere else
+        - Without this, every audit entry would ALSO appear in the console
+          and app.log — defeating the purpose of a separate audit file
+
+      The "AUDIT" name matches LoggerFactory.getLogger("AUDIT") in AuditAspect.
+    -->
+    <logger name="AUDIT" level="INFO" additivity="false">
+        <appender-ref ref="AUDIT_FILE" />
+    </logger>
+
+    <!--
+      Application package logger — set to DEBUG so we see service execution
+      times from ExecutionTimeAspect during development.
+      In production, override via LOG_LEVEL environment variable or
+      application.yml: logging.level.com.mfplatform: INFO
+    -->
+    <logger name="com.mfplatform" level="${LOG_LEVEL:-DEBUG}" />
+
+    <!--
+      Reduce noise from frameworks — we don't need to see every Hibernate
+      SQL parameter binding or Spring Security authorization decision in
+      normal operation. Set to WARN so we only see problems.
+    -->
+    <logger name="org.hibernate.SQL"                       level="DEBUG" />
+    <logger name="org.hibernate.type.descriptor.sql"       level="WARN"  />
+    <logger name="org.springframework.security"            level="WARN"  />
+    <logger name="org.springframework.web"                 level="WARN"  />
+    <logger name="org.flywaydb"                            level="INFO"  />
+
+
+    <!-- ─── Root logger ──────────────────────────────────────────────────── -->
+    <!--
+      Root logger catches everything not matched by a specific logger above.
+      Routes to both console (for development) and app.log file.
+      Level INFO means DEBUG messages from third-party libraries are suppressed
+      unless overridden above.
+    -->
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"  />
+        <appender-ref ref="APP_FILE" />
+    </root>
+
+</configuration>

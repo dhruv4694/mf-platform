@@ -1,0 +1,34 @@
+# Dockerfile.dev — Development image for Spring Boot
+#
+# PHILOSOPHY:
+# The image bakes in the JDK + Maven + all project dependencies.
+# Your source code is NOT copied into the image.
+# compose.dev.yml mounts ./src from your machine into /app/src at runtime.
+#
+# REBUILD THIS IMAGE only when pom.xml changes (new dependency added).
+# Normal development: just edit .java files — Spring DevTools restarts automatically.
+
+# Use the official Maven image — includes both JDK 17 and Maven
+# This avoids the "mvn: not found" error from eclipse-temurin which only has JDK
+FROM maven:3.9-eclipse-temurin-17-alpine
+
+WORKDIR /app
+
+# Step 1: Copy ONLY pom.xml — cached until you add/remove a dependency
+COPY pom.xml .
+
+# Step 2: Download all dependencies into this image layer (~2-3 min first time)
+# -B = batch mode, no interactive prompts
+# || true = don't fail if some optional deps can't be resolved offline
+RUN mvn dependency:go-offline -B || true
+
+# Step 3: Copy source as fallback
+# This layer is SHADOWED by the ./src bind mount in compose.dev.yml
+# Without the volume, the container still has source to run from
+COPY src ./src
+
+# Step 4: Start Spring Boot with DevTools enabled
+# DevTools watches the classpath and restarts the app when files change
+# The bind mount makes your local ./src visible inside the container
+# Save a .java file → DevTools detects the recompiled .class → restarts in ~2s
+CMD ["mvn", "spring-boot:run", "-Dspring.profiles.active=dev"]

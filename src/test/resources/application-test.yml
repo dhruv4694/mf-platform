@@ -1,0 +1,37 @@
+# Test configuration overrides.
+# Active when spring.profiles.active=test, which @SpringBootTest sets automatically
+# when this file exists alongside the main application.yml.
+
+spring:
+  # Disable scheduling in tests — we don't want the SIP scheduler or
+  # DistributorVerificationWorker firing during integration tests
+  task:
+    scheduling:
+      enabled: false
+  batch:
+    job:
+      enabled: false  # don't auto-run batch jobs in tests
+    jdbc:
+      initialize-schema: never
+
+jwt:
+  # Test-specific JWT secret — different from production.
+  # Must be at least 32 characters for HMAC-SHA256.
+  secret: test-only-secret-not-for-production-use
+  access-token-expiry-minutes: 60   # longer in tests to avoid token expiry mid-test
+  refresh-token-expiry-days: 7
+
+logging:
+  level:
+    com.mfplatform: WARN
+    org.springframework.security: WARN
+    org.hibernate.SQL: WARN
+    AUDIT: OFF
+
+# Disable all notification channels in tests
+# (no SMTP server available, no need to send emails during unit/integration tests)
+notification:
+  email:
+    enabled: false
+  sms:
+    enabled: false

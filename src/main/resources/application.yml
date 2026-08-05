@@ -1,0 +1,101 @@
+spring:
+  application:
+    name: mf-platform
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/mf_platform
+    username: mf_user
+    password: mf_password
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      # validate only — Flyway owns the schema, Hibernate should never auto-generate DDL
+      ddl-auto: validate
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+    open-in-view: false
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+
+  # Spring Batch — disable auto-run on startup, use Flyway for schema
+  batch:
+    job:
+      enabled: false       # jobs run via @Scheduled, not on startup
+    jdbc:
+      initialize-schema: never  # Flyway manages V5__spring_batch_schema.sql
+
+  # Mail (MailHog for dev, override via env vars for production)
+  # Dev: docker compose up -d starts MailHog on localhost:1025
+  # View emails at: http://localhost:8025
+  # Production: set MAIL_HOST, MAIL_PORT, MAIL_USERNAME, MAIL_PASSWORD env vars
+  mail:
+    host: ${MAIL_HOST:localhost}
+    port: ${MAIL_PORT:1025}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: ${MAIL_SMTP_AUTH:false}
+          starttls:
+            enable: ${MAIL_STARTTLS:false}
+        debug: false  # set true to see raw SMTP conversation in logs
+
+server:
+  port: 8080
+
+jwt:
+  # placeholder secret for local dev only — override via env var in real deployments
+  secret: ${JWT_SECRET:dev-only-secret-change-me-before-any-real-use-please}
+  access-token-expiry-minutes: 15
+  refresh-token-expiry-days: 7
+
+app:
+  seed-admin:
+    username: ${SEED_ADMIN_USERNAME:admin}
+    password: ${SEED_ADMIN_PASSWORD:ChangeMe123!}
+  cors:
+    # comma-separated list — override via ALLOWED_ORIGINS in real deployments
+    allowed-origins: ${ALLOWED_ORIGINS:http://localhost:5173,http://localhost:3000}
+
+logging:
+  level:
+    com.mfplatform: DEBUG
+    org.springframework.security: INFO
+
+# ─── Notification channel configuration ─────────────────────────────────────
+notification:
+  email:
+    enabled: ${NOTIFICATION_EMAIL_ENABLED:true}
+    from: ${NOTIFICATION_EMAIL_FROM:noreply@mfplatform.com}
+  sms:
+    # Disabled by default — enable when SMS provider credentials are configured
+    enabled: ${NOTIFICATION_SMS_ENABLED:false}
+    provider: ${SMS_PROVIDER:stub}
+    api-key: ${SMS_API_KEY:}
+
+# ─── Springdoc / Swagger UI ──────────────────────────────────────────────────
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    # Group endpoints by @Tag name — cleaner than by controller class name
+    tags-sorter: alpha
+    operations-sorter: alpha
+    # Expand all tags by default so you can see all endpoints immediately
+    doc-expansion: list
+  api-docs:
+    path: /v3/api-docs
+    
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+
+# ─── Async thread pool ───────────────────────────────────────────────────────
+# Configured in AsyncConfig.java — these are the values used there
+# Documented here for visibility (actual config is in AsyncConfig, not here)

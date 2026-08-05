@@ -1,0 +1,100 @@
+# docker-compose.yml — MF Platform
+#
+# TWO MODES:
+#
+# DEVELOPMENT (default — what you use while writing code):
+#   docker compose up -d
+#   → starts PostgreSQL + MailHog only
+#   → you run Spring Boot and React manually
+#   → edit code freely, app hot-reloads
+#
+# FULL STACK (for deployment preview or sharing with others):
+#   docker compose --profile fullstack up -d
+#   → starts PostgreSQL + MailHog + Spring Boot app + React (nginx)
+#   → everything in containers, one command
+#
+# STOP EVERYTHING:
+#   docker compose down
+#   docker compose down -v   ← also deletes the postgres data volume
+
+version: "3.8"
+
+services:
+
+  # ─── PostgreSQL ─────────────────────────────────────────────────────────────
+  # Always starts — needed by both dev and full-stack modes.
+  postgres:
+    image: postgres:16-alpine
+    container_name: mf-postgres
+    environment:
+      POSTGRES_DB:       mf_platform
+      POSTGRES_USER:     mf_user
+      POSTGRES_PASSWORD: mf_password
+    ports:
+      - "5432:5432"       # exposed so your local Spring Boot app can connect
+    volumes:
+      - mf-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mf_user -d mf_platform"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ─── MailHog ────────────────────────────────────────────────────────────────
+  # Fake SMTP server — captures all outbound emails without sending them.
+  # Always starts — needed by both dev and full-stack modes.
+  # View emails at: http://localhost:8025
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: mf-mailhog
+    ports:
+      - "1025:1025"       # SMTP — Spring Boot sends here
+      - "8025:8025"       # Web UI — open in browser to read emails
+
+  # ─── Spring Boot app ────────────────────────────────────────────────────────
+  # Only starts in fullstack mode: docker compose --profile fullstack up -d
+  # In development, you run this yourself (IntelliJ / mvn spring-boot:run).
+  app:
+    profiles: ["fullstack"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mf-app
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_DATASOURCE_URL:      jdbc:postgresql://postgres:5432/mf_platform
+      SPRING_DATASOURCE_USERNAME: mf_user
+      SPRING_DATASOURCE_PASSWORD: mf_password
+      MAIL_HOST:                  mailhog
+      MAIL_PORT:                  1025
+      JWT_SECRET:                 ${JWT_SECRET:-change-me-in-production-min-32-chars}
+      SEED_ADMIN_USERNAME:        ${SEED_ADMIN_USERNAME:-admin}
+      SEED_ADMIN_PASSWORD:        ${SEED_ADMIN_PASSWORD:-ChangeMe123!}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mailhog:
+        condition: service_started
+    restart: unless-stopped
+
+  # ─── React frontend (nginx) ──────────────────────────────────────────────────
+  # Only starts in fullstack mode.
+  # In development, you run: npm run dev (Vite on localhost:5173).
+  frontend:
+    profiles: ["fullstack"]
+    build:
+      # mf-platform-frontend is a sibling of this repo's parent directory, not
+      # nested inside it (matches compose.prod.yml's context path).
+      context: ../../mf-platform-frontend/mf-platform-frontend
+      dockerfile: Dockerfile
+    container_name: mf-frontend
+    ports:
+      - "3000:80"         # nginx serves the built React app on port 3000
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  mf-postgres-data:
+    name: mf-postgres-data  # named volume so data persists across docker compose down

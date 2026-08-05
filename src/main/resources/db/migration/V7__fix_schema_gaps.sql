@@ -1,0 +1,5 @@
+ALTER TABLE payment
+    ADD COLUMN IF NOT EXISTS initiated_at TIMESTAMP NOT NULL DEFAULT now();
+
+ALTER TABLE notification
+    ALTER COLUMN investor_id DROP NOT NULL;
