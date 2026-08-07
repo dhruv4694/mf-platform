@@ -52,7 +52,10 @@ EXPOSE 8080
 #   -XX:MaxRAMPercentage=75.0    — use 75% of container's RAM for the JVM heap
 #   -Djava.security.egd=...      — faster startup (avoids blocking on /dev/random)
 ENTRYPOINT ["java", \
+  "-Xmx400m", \
+  "-XX:MaxMetaspaceSize=128m", \
+  "-XX:+HeapDumpOnOutOfMemoryError", \
+  "-XX:HeapDumpPath=/tmp/heapdump.hprof", \
   "-XX:+UseContainerSupport", \
-  "-XX:MaxRAMPercentage=75.0", \
   "-Djava.security.egd=file:/dev/./urandom", \
   "-jar", "app.jar"]
