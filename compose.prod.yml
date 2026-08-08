@@ -93,6 +93,13 @@ services:
     build:
       context: ../../mf-platform-frontend/mf-platform-frontend
       dockerfile: Dockerfile       # ← prod multi-stage image (nginx + dist/ only)
+      args:
+        # Baked into the JS bundle at build time (Vite, not a runtime env var —
+        # see the Dockerfile). This must be a URL the BROWSER can reach, not a
+        # Docker-internal hostname: for local compose, that's the host port
+        # "app" is published on, not "http://app:8080" (which only resolves
+        # inside the Compose network, not from your browser).
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8080}
     container_name: mf-prod-frontend
     ports:
       - "3000:80"

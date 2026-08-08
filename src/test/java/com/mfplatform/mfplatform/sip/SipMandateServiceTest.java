@@ -96,7 +96,8 @@ class SipMandateServiceTest {
                     new BigDecimal("2000.00"),
                     SipFrequency.MONTHLY,
                     LocalDate.now().plusDays(1), // starts tomorrow
-                    null  // open-ended
+                    null, // open-ended
+                    15    // sipDay
             );
 
             // lenient: rejectsWhenFolioNotOwned() throws before this is ever consulted
@@ -120,6 +121,7 @@ class SipMandateServiceTest {
                         .nextDueDate(m.getNextDueDate()).status(m.getStatus())
                         .mandateReference(m.getMandateReference())
                         .initiatedByUserId(m.getInitiatedByUserId())
+                        .sipDay(m.getSipDay())
                         .build();
             });
         }
@@ -139,19 +141,180 @@ class SipMandateServiceTest {
         }
 
         @Test
-        @DisplayName("nextDueDate is set to startDate on registration")
-        void nextDueDateEqualsStartDate() {
-            LocalDate tomorrow = LocalDate.now().plusDays(1);
+        @DisplayName("MONTHLY: first due date is startDate's own month when startDate day <= sipDay")
+        void firstDueDateSameMonthWhenStartDayBeforeSipDay() {
+            when(businessDateService.today()).thenReturn(LocalDate.of(2020, 1, 1));
+            RegisterSipRequest request = new RegisterSipRequest(
+                    FOLIO_ID, SCHEME_ID, new BigDecimal("2000.00"), SipFrequency.MONTHLY,
+                    LocalDate.of(2026, 3, 10), null, 15);
 
-            sipMandateService.register(validRequest, authentication);
+            sipMandateService.register(request, authentication);
 
             ArgumentCaptor<SipMandate> captor = ArgumentCaptor.forClass(SipMandate.class);
             verify(sipMandateRepository).save(captor.capture());
+            assertThat(captor.getValue().getNextDueDate()).isEqualTo(LocalDate.of(2026, 3, 15));
+        }
 
-            // Critical: nextDueDate must equal startDate so first installment
-            // is processed on the start date
-            assertThat(captor.getValue().getNextDueDate()).isEqualTo(tomorrow);
-            assertThat(captor.getValue().getStartDate()).isEqualTo(tomorrow);
+        @Test
+        @DisplayName("MONTHLY: first due date rolls to next month when startDate day > sipDay")
+        void firstDueDateNextMonthWhenStartDayAfterSipDay() {
+            when(businessDateService.today()).thenReturn(LocalDate.of(2020, 1, 1));
+            RegisterSipRequest request = new RegisterSipRequest(
+                    FOLIO_ID, SCHEME_ID, new BigDecimal("2000.00"), SipFrequency.MONTHLY,
+                    LocalDate.of(2026, 3, 20), null, 15);
+
+            sipMandateService.register(request, authentication);
+
+            ArgumentCaptor<SipMandate> captor = ArgumentCaptor.forClass(SipMandate.class);
+            verify(sipMandateRepository).save(captor.capture());
+            assertThat(captor.getValue().getNextDueDate()).isEqualTo(LocalDate.of(2026, 4, 15));
+        }
+
+        @Test
+        @DisplayName("MONTHLY: first due date equals startDate when startDate day == sipDay")
+        void firstDueDateSameDayWhenStartDayEqualsSipDay() {
+            when(businessDateService.today()).thenReturn(LocalDate.of(2020, 1, 1));
+            RegisterSipRequest request = new RegisterSipRequest(
+                    FOLIO_ID, SCHEME_ID, new BigDecimal("2000.00"), SipFrequency.MONTHLY,
+                    LocalDate.of(2026, 3, 15), null, 15);
+
+            sipMandateService.register(request, authentication);
+
+            ArgumentCaptor<SipMandate> captor = ArgumentCaptor.forClass(SipMandate.class);
+            verify(sipMandateRepository).save(captor.capture());
+            assertThat(captor.getValue().getNextDueDate()).isEqualTo(LocalDate.of(2026, 3, 15));
+        }
+
+        @Test
+        @DisplayName("MONTHLY: sipDay=31 clamps to the last real day of a short month")
+        void firstDueDateClampsToShortMonth() {
+            when(businessDateService.today()).thenReturn(LocalDate.of(2020, 1, 1));
+            RegisterSipRequest request = new RegisterSipRequest(
+                    FOLIO_ID, SCHEME_ID, new BigDecimal("2000.00"), SipFrequency.MONTHLY,
+                    LocalDate.of(2026, 2, 1), null, 31);
+
+            sipMandateService.register(request, authentication);
+
+            ArgumentCaptor<SipMandate> captor = ArgumentCaptor.forClass(SipMandate.class);
+            verify(sipMandateRepository).save(captor.capture());
+            // 2026 is not a leap year — February has 28 days
+            assertThat(captor.getValue().getNextDueDate()).isEqualTo(LocalDate.of(2026, 2, 28));
+        }
+
+        @Test
+        @DisplayName("rejects MONTHLY registration without sipDay")
+        void rejectsMonthlyWithoutSipDay() {
+            RegisterSipRequest request = new RegisterSipRequest(
+                    FOLIO_ID, SCHEME_ID, new BigDecimal("2000.00"), SipFrequency.MONTHLY,
+                    LocalDate.now().plusDays(1), null, null);
+
+            assertThatThrownBy(() ->
+                sipMandateService.register(request, authentication)
+            )
+            .isInstanceOf(TransactionValidationException.class)
+            .hasMessageContaining("sipDay is required");
+
+            verify(sipMandateRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("rejects MONTHLY registration with sipDay out of 1-31 range")
+        void rejectsMonthlySipDayOutOfRange() {
+            RegisterSipRequest request = new RegisterSipRequest(
+                    FOLIO_ID, SCHEME_ID, new BigDecimal("2000.00"), SipFrequency.MONTHLY,
+                    LocalDate.now().plusDays(1), null, 32);
+
+            assertThatThrownBy(() ->
+                sipMandateService.register(request, authentication)
+            )
+            .isInstanceOf(TransactionValidationException.class)
+            .hasMessageContaining("between 1 and 31");
+
+            verify(sipMandateRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("WEEKLY registration ignores a client-supplied sipDay — stored mandate has sipDay=null")
+        void ignoresSipDayForWeekly() {
+            when(businessDateService.today()).thenReturn(LocalDate.of(2020, 1, 1));
+            RegisterSipRequest request = new RegisterSipRequest(
+                    FOLIO_ID, SCHEME_ID, new BigDecimal("2000.00"), SipFrequency.WEEKLY,
+                    LocalDate.of(2026, 3, 10), null, 15); // sipDay sent but should be ignored
+
+            sipMandateService.register(request, authentication);
+
+            ArgumentCaptor<SipMandate> captor = ArgumentCaptor.forClass(SipMandate.class);
+            verify(sipMandateRepository).save(captor.capture());
+            assertThat(captor.getValue().getSipDay()).isNull();
+        }
+
+        @Test
+        @DisplayName("QUARTERLY registration ignores a client-supplied sipDay — stored mandate has sipDay=null")
+        void ignoresSipDayForQuarterly() {
+            when(businessDateService.today()).thenReturn(LocalDate.of(2020, 1, 1));
+            RegisterSipRequest request = new RegisterSipRequest(
+                    FOLIO_ID, SCHEME_ID, new BigDecimal("2000.00"), SipFrequency.QUARTERLY,
+                    LocalDate.of(2026, 3, 10), null, 15); // sipDay sent but should be ignored
+
+            sipMandateService.register(request, authentication);
+
+            ArgumentCaptor<SipMandate> captor = ArgumentCaptor.forClass(SipMandate.class);
+            verify(sipMandateRepository).save(captor.capture());
+            assertThat(captor.getValue().getSipDay()).isNull();
+        }
+
+        @Test
+        @DisplayName("scheduleDescription for MONTHLY interpolates sipDay with correct ordinal suffix")
+        void scheduleDescriptionForMonthly() {
+            when(businessDateService.today()).thenReturn(LocalDate.of(2020, 1, 1));
+            RegisterSipRequest request = new RegisterSipRequest(
+                    FOLIO_ID, SCHEME_ID, new BigDecimal("2000.00"), SipFrequency.MONTHLY,
+                    LocalDate.of(2026, 3, 1), null, 21); // 21st -> "21st", not "21th"
+
+            SipMandateResponse response = sipMandateService.register(request, authentication);
+
+            assertThat(response.scheduleDescription()).isEqualTo("Deducted on the 21st of each month");
+        }
+
+        @Test
+        @DisplayName("scheduleDescription for MONTHLY handles the 11th/12th/13th 'th' exception")
+        void scheduleDescriptionForMonthlyTeensException() {
+            when(businessDateService.today()).thenReturn(LocalDate.of(2020, 1, 1));
+            RegisterSipRequest request = new RegisterSipRequest(
+                    FOLIO_ID, SCHEME_ID, new BigDecimal("2000.00"), SipFrequency.MONTHLY,
+                    LocalDate.of(2026, 3, 1), null, 11);
+
+            SipMandateResponse response = sipMandateService.register(request, authentication);
+
+            assertThat(response.scheduleDescription()).isEqualTo("Deducted on the 11th of each month");
+        }
+
+        @Test
+        @DisplayName("scheduleDescription for WEEKLY is the fixed anchor text")
+        void scheduleDescriptionForWeekly() {
+            when(businessDateService.today()).thenReturn(LocalDate.of(2020, 1, 1));
+            RegisterSipRequest request = new RegisterSipRequest(
+                    FOLIO_ID, SCHEME_ID, new BigDecimal("2000.00"), SipFrequency.WEEKLY,
+                    LocalDate.of(2026, 3, 1), null, null);
+
+            SipMandateResponse response = sipMandateService.register(request, authentication);
+
+            assertThat(response.scheduleDescription())
+                    .isEqualTo("Deducted on the 7th, 14th, 21st, and 28th of each month");
+        }
+
+        @Test
+        @DisplayName("scheduleDescription for QUARTERLY is the fixed anchor text")
+        void scheduleDescriptionForQuarterly() {
+            when(businessDateService.today()).thenReturn(LocalDate.of(2020, 1, 1));
+            RegisterSipRequest request = new RegisterSipRequest(
+                    FOLIO_ID, SCHEME_ID, new BigDecimal("2000.00"), SipFrequency.QUARTERLY,
+                    LocalDate.of(2026, 3, 1), null, null);
+
+            SipMandateResponse response = sipMandateService.register(request, authentication);
+
+            assertThat(response.scheduleDescription())
+                    .isEqualTo("Deducted on the 8th of January, April, July, and October");
         }
 
         @Test
@@ -185,7 +348,8 @@ class SipMandateServiceTest {
                     FOLIO_ID, SCHEME_ID, new BigDecimal("2000.00"),
                     SipFrequency.MONTHLY,
                     LocalDate.now().minusDays(1), // yesterday
-                    null
+                    null,
+                    15
             );
 
             assertThatThrownBy(() ->
@@ -203,7 +367,8 @@ class SipMandateServiceTest {
                     FOLIO_ID, SCHEME_ID, new BigDecimal("2000.00"),
                     SipFrequency.MONTHLY,
                     startDate,
-                    startDate.minusDays(1) // end before start
+                    startDate.minusDays(1), // end before start
+                    15
             );
 
             assertThatThrownBy(() ->
@@ -261,6 +426,7 @@ class SipMandateServiceTest {
                     .status(SipMandateStatus.ACTIVE)
                     .mandateReference("NACH-ABCD12345678EFGH")
                     .initiatedByUserId(USER_ID)
+                    .sipDay(15)
                     .build();
 
             when(sipMandateRepository.findById(100L))
@@ -325,6 +491,7 @@ class SipMandateServiceTest {
                     .status(SipMandateStatus.PAUSED)
                     .mandateReference("NACH-ABCD12345678EFGH")
                     .initiatedByUserId(USER_ID)
+                    .sipDay(15)
                     .build();
 
             when(sipMandateRepository.findById(100L))
@@ -375,6 +542,7 @@ class SipMandateServiceTest {
                     .status(SipMandateStatus.ACTIVE)
                     .mandateReference("NACH-ABCD12345678EFGH")
                     .initiatedByUserId(USER_ID)
+                    .sipDay(15)
                     .build();
 
             // lenient: throwsWhenMandateNotFound calls cancel(999L, ...) — findById(100L)
@@ -437,56 +605,94 @@ class SipMandateServiceTest {
     @DisplayName("SipMandate domain methods (via service)")
     class DomainMethodTests {
 
-        @Test
-        @DisplayName("MONTHLY mandate advances nextDueDate by one month")
-        void monthlyAdvancesOneMonth() {
-            LocalDate today = LocalDate.now();
-            SipMandate mandate = SipMandate.builder()
+        private SipMandate mandateWith(SipFrequency frequency, LocalDate nextDueDate, Integer sipDay) {
+            return SipMandate.builder()
                     .id(1L).folioId(FOLIO_ID).schemeId(SCHEME_ID)
-                    .amount(new BigDecimal("2000")).frequency(SipFrequency.MONTHLY)
-                    .startDate(today).nextDueDate(today)
+                    .amount(new BigDecimal("2000")).frequency(frequency)
+                    .startDate(nextDueDate).nextDueDate(nextDueDate).sipDay(sipDay)
                     .status(SipMandateStatus.ACTIVE)
                     .mandateReference("NACH-TEST").initiatedByUserId(USER_ID)
                     .build();
+        }
+
+        // ── advanceNextDueDate() — anchor-based, not incremental arithmetic ──
+
+        @Test
+        @DisplayName("MONTHLY advances to the next occurrence of sipDay")
+        void monthlyAdvancesToNextSipDay() {
+            SipMandate mandate = mandateWith(SipFrequency.MONTHLY, LocalDate.of(2026, 3, 15), 15);
 
             mandate.advanceNextDueDate();
 
-            assertThat(mandate.getNextDueDate()).isEqualTo(today.plusMonths(1));
+            assertThat(mandate.getNextDueDate()).isEqualTo(LocalDate.of(2026, 4, 15));
         }
 
         @Test
-        @DisplayName("WEEKLY mandate advances nextDueDate by 7 days")
-        void weeklyAdvancesSevenDays() {
-            LocalDate today = LocalDate.now();
-            SipMandate mandate = SipMandate.builder()
-                    .id(1L).folioId(FOLIO_ID).schemeId(SCHEME_ID)
-                    .amount(new BigDecimal("500")).frequency(SipFrequency.WEEKLY)
-                    .startDate(today).nextDueDate(today)
-                    .status(SipMandateStatus.ACTIVE)
-                    .mandateReference("NACH-TEST").initiatedByUserId(USER_ID)
-                    .build();
+        @DisplayName("MONTHLY sipDay=31 clamps to February's last real day, not an error")
+        void monthlyClampsToShortMonth() {
+            SipMandate mandate = mandateWith(SipFrequency.MONTHLY, LocalDate.of(2026, 1, 31), 31);
 
             mandate.advanceNextDueDate();
 
-            assertThat(mandate.getNextDueDate()).isEqualTo(today.plusWeeks(1));
+            // 2026 is not a leap year — February has 28 days
+            assertThat(mandate.getNextDueDate()).isEqualTo(LocalDate.of(2026, 2, 28));
         }
 
         @Test
-        @DisplayName("mandate auto-completes when nextDueDate passes endDate")
+        @DisplayName("WEEKLY advances to the next anchor within the same month")
+        void weeklyAdvancesToNextAnchorWithinMonth() {
+            SipMandate mandate = mandateWith(SipFrequency.WEEKLY, LocalDate.of(2026, 3, 7), null);
+
+            mandate.advanceNextDueDate();
+
+            assertThat(mandate.getNextDueDate()).isEqualTo(LocalDate.of(2026, 3, 14));
+        }
+
+        @Test
+        @DisplayName("WEEKLY wraps from the 28th to the 7th of next month, not 28+7")
+        void weeklyWrapsToNextMonthAfter28th() {
+            SipMandate mandate = mandateWith(SipFrequency.WEEKLY, LocalDate.of(2026, 3, 28), null);
+
+            mandate.advanceNextDueDate();
+
+            assertThat(mandate.getNextDueDate()).isEqualTo(LocalDate.of(2026, 4, 7));
+        }
+
+        @Test
+        @DisplayName("QUARTERLY advances to the next quarterly anchor within the same year")
+        void quarterlyAdvancesToNextAnchorWithinYear() {
+            SipMandate mandate = mandateWith(SipFrequency.QUARTERLY, LocalDate.of(2026, 1, 8), null);
+
+            mandate.advanceNextDueDate();
+
+            assertThat(mandate.getNextDueDate()).isEqualTo(LocalDate.of(2026, 4, 8));
+        }
+
+        @Test
+        @DisplayName("QUARTERLY wraps from October 8th to January 8th of next year")
+        void quarterlyWrapsToNextYearAfterOctober() {
+            SipMandate mandate = mandateWith(SipFrequency.QUARTERLY, LocalDate.of(2026, 10, 8), null);
+
+            mandate.advanceNextDueDate();
+
+            assertThat(mandate.getNextDueDate()).isEqualTo(LocalDate.of(2027, 1, 8));
+        }
+
+        @Test
+        @DisplayName("mandate auto-completes when the advanced nextDueDate passes endDate")
         void autoCompletesWhenEndDatePassed() {
-            LocalDate today    = LocalDate.now();
-            LocalDate endDate  = today.plusMonths(1).minusDays(1); // one day before next due
-
             SipMandate mandate = SipMandate.builder()
                     .id(1L).folioId(FOLIO_ID).schemeId(SCHEME_ID)
                     .amount(new BigDecimal("2000")).frequency(SipFrequency.MONTHLY)
-                    .startDate(today).endDate(endDate)
-                    .nextDueDate(today)
+                    .startDate(LocalDate.of(2026, 3, 15))
+                    .endDate(LocalDate.of(2026, 4, 14)) // one day before the next due date
+                    .nextDueDate(LocalDate.of(2026, 3, 15))
+                    .sipDay(15)
                     .status(SipMandateStatus.ACTIVE)
                     .mandateReference("NACH-TEST").initiatedByUserId(USER_ID)
                     .build();
 
-            // After advancing, nextDueDate = today + 1 month, which is after endDate
+            // After advancing, nextDueDate = 2026-04-15, which is after endDate
             mandate.advanceNextDueDate();
 
             assertThat(mandate.getStatus()).isEqualTo(SipMandateStatus.COMPLETED);
@@ -495,20 +701,42 @@ class SipMandateServiceTest {
         @Test
         @DisplayName("mandate does NOT auto-complete when endDate is null (open-ended)")
         void doesNotCompleteWhenOpenEnded() {
-            LocalDate today = LocalDate.now();
-            SipMandate mandate = SipMandate.builder()
-                    .id(1L).folioId(FOLIO_ID).schemeId(SCHEME_ID)
-                    .amount(new BigDecimal("2000")).frequency(SipFrequency.MONTHLY)
-                    .startDate(today).endDate(null) // open-ended
-                    .nextDueDate(today)
-                    .status(SipMandateStatus.ACTIVE)
-                    .mandateReference("NACH-TEST").initiatedByUserId(USER_ID)
-                    .build();
+            SipMandate mandate = mandateWith(SipFrequency.MONTHLY, LocalDate.of(2026, 3, 15), 15);
 
             mandate.advanceNextDueDate();
 
             // Open-ended SIP stays ACTIVE indefinitely
             assertThat(mandate.getStatus()).isEqualTo(SipMandateStatus.ACTIVE);
+        }
+
+        // ── computeFirstDueDate() — same anchor logic, seeded from startDate ──
+
+        @Test
+        @DisplayName("computeFirstDueDate MONTHLY: startDate day <= sipDay stays in the same month")
+        void computeFirstDueDateMonthlySameMonth() {
+            LocalDate result = SipMandate.computeFirstDueDate(LocalDate.of(2026, 3, 10), SipFrequency.MONTHLY, 15);
+            assertThat(result).isEqualTo(LocalDate.of(2026, 3, 15));
+        }
+
+        @Test
+        @DisplayName("computeFirstDueDate MONTHLY: startDate day > sipDay rolls to next month")
+        void computeFirstDueDateMonthlyNextMonth() {
+            LocalDate result = SipMandate.computeFirstDueDate(LocalDate.of(2026, 3, 20), SipFrequency.MONTHLY, 15);
+            assertThat(result).isEqualTo(LocalDate.of(2026, 4, 15));
+        }
+
+        @Test
+        @DisplayName("computeFirstDueDate WEEKLY: nearest anchor on or after startDate")
+        void computeFirstDueDateWeekly() {
+            LocalDate result = SipMandate.computeFirstDueDate(LocalDate.of(2026, 3, 10), SipFrequency.WEEKLY, null);
+            assertThat(result).isEqualTo(LocalDate.of(2026, 3, 14));
+        }
+
+        @Test
+        @DisplayName("computeFirstDueDate QUARTERLY: nearest anchor on or after startDate")
+        void computeFirstDueDateQuarterly() {
+            LocalDate result = SipMandate.computeFirstDueDate(LocalDate.of(2026, 3, 1), SipFrequency.QUARTERLY, null);
+            assertThat(result).isEqualTo(LocalDate.of(2026, 4, 8));
         }
     }
 }

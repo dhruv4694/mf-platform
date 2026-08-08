@@ -26,4 +26,16 @@ public class AdminDtos {
             int failed,
             int pendingNoNav
     ) {}
+
+    /**
+     * Result of a manually-triggered SIP batch run. read/written/skipped come
+     * from the job's single step execution (SipBatchJobConfig.sipProcessingStep).
+     */
+    public record SipBatchRunResponse(
+            String status,
+            String exitCode,
+            long read,
+            long written,
+            long skipped
+    ) {}
 }

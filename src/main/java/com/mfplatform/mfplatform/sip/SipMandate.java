@@ -6,6 +6,7 @@ import lombok.*;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.Instant;
+import java.time.YearMonth;
 
 /**
  * SipMandate is a standing instruction that generates PURCHASE transactions
@@ -73,6 +74,17 @@ public class SipMandate {
     private LocalDate startDate;
 
     /**
+     * The recurring day-of-month deductions land on — MONTHLY only, null for
+     * WEEKLY/QUARTERLY (those use fixed calendar anchors, no user-chosen day).
+     * Independent of startDate: startDate is when the mandate becomes active,
+     * sipDay is which day of the month every installment (including the
+     * first) is scheduled for. Clamped to the target month's actual length
+     * when it exceeds it (e.g. sipDay=31 in February → the 28th/29th).
+     */
+    @Column(name = "sip_day")
+    private Integer sipDay;
+
+    /**
      * Optional — null means the SIP runs indefinitely until cancelled.
      * When nextDueDate passes endDate, status moves to COMPLETED automatically.
      */
@@ -111,23 +123,111 @@ public class SipMandate {
 
     /**
      * Advances nextDueDate to the next installment date based on frequency.
-     * Called by SipExecutionService after each installment — regardless of
-     * whether the installment succeeded or failed.
+     * Called by the SIP batch (SipItemProcessor) after each installment —
+     * regardless of whether the installment succeeded or failed.
+     *
+     * Fixed-calendar-anchor based, not incremental day/month arithmetic —
+     * incremental arithmetic (plusWeeks(1), plusMonths(1)) is exactly what
+     * breaks at month/year boundaries (e.g. day 28 + 7 days lands on the 4th/5th
+     * of next month instead of the fixed 7th anchor). See computeFirstDueDate()
+     * and nextAnchorOnOrAfter() for the shared anchor logic.
      *
      * After advancing, checks if the new nextDueDate has passed the endDate.
      * If so, marks the mandate COMPLETED.
      */
     public void advanceNextDueDate() {
-        this.nextDueDate = switch (this.frequency) {
-            case WEEKLY     -> this.nextDueDate.plusWeeks(1);
-            case MONTHLY    -> this.nextDueDate.plusMonths(1);
-            case QUARTERLY  -> this.nextDueDate.plusMonths(3);
-        };
+        this.nextDueDate = nextAnchorOnOrAfter(this.nextDueDate.plusDays(1), this.frequency, this.sipDay);
 
         // Auto-complete if end date has passed
         if (this.endDate != null && this.nextDueDate.isAfter(this.endDate)) {
             this.status = SipMandateStatus.COMPLETED;
         }
+    }
+
+    /**
+     * Computes the first installment date for a new mandate — the nearest
+     * schedule anchor on or after startDate. Used by SipMandateService at
+     * registration time.
+     *
+     * MONTHLY: if startDate's day-of-month <= sipDay, the first due date is
+     * sipDay in startDate's own month (clamped to that month's length);
+     * otherwise it's sipDay in the following month. This is exactly what
+     * nextAnchorOnOrAfter() computes when seeded with startDate itself —
+     * "the next MONTHLY anchor on or after startDate" is the same question
+     * as "the first due date."
+     *
+     * WEEKLY/QUARTERLY: nearest fixed anchor (7/14/21/28, or Jan/Apr/Jul/Oct
+     * 8th) on or after startDate — keeps the first installment consistent
+     * with the mandate's own scheduleDescription rather than landing on an
+     * arbitrary startDate that isn't one of the advertised anchor days.
+     *
+     * @param sipDay required for MONTHLY, ignored for WEEKLY/QUARTERLY
+     */
+    public static LocalDate computeFirstDueDate(LocalDate startDate, SipFrequency frequency, Integer sipDay) {
+        return nextAnchorOnOrAfter(startDate, frequency, sipDay);
+    }
+
+    /**
+     * The single shared anchor-resolution routine both advanceNextDueDate()
+     * and computeFirstDueDate() delegate to — "find the next schedule anchor
+     * on or after the given reference date." advanceNextDueDate() seeds it
+     * with (currentNextDueDate + 1 day) to guarantee strict forward progress;
+     * computeFirstDueDate() seeds it with startDate itself (inclusive — the
+     * first installment can land exactly on startDate if that's already an
+     * anchor).
+     */
+    private static LocalDate nextAnchorOnOrAfter(LocalDate ref, SipFrequency frequency, Integer sipDay) {
+        return switch (frequency) {
+            case WEEKLY -> nextWeeklyAnchor(ref);
+            case QUARTERLY -> nextQuarterlyAnchor(ref);
+            case MONTHLY -> nextMonthlyAnchor(ref, sipDay);
+        };
+    }
+
+    /** Fixed anchors: 7th, 14th, 21st, 28th of every month. */
+    private static LocalDate nextWeeklyAnchor(LocalDate ref) {
+        int[] anchors = {7, 14, 21, 28};
+        for (int anchor : anchors) {
+            if (anchor >= ref.getDayOfMonth()) {
+                return ref.withDayOfMonth(anchor);
+            }
+        }
+        // Past the 28th this month — wrap to the 7th of next month.
+        return ref.plusMonths(1).withDayOfMonth(7);
+    }
+
+    /** Fixed anchors: 8th of January, April, July, October. */
+    private static LocalDate nextQuarterlyAnchor(LocalDate ref) {
+        int[] anchorMonths = {1, 4, 7, 10};
+        for (int month : anchorMonths) {
+            LocalDate candidate = LocalDate.of(ref.getYear(), month, 8);
+            if (!candidate.isBefore(ref)) {
+                return candidate;
+            }
+        }
+        // Past October 8th this year — wrap to January 8th of next year.
+        return LocalDate.of(ref.getYear() + 1, 1, 8);
+    }
+
+    /** User-chosen day-of-month anchor, clamped to each target month's actual length. */
+    private static LocalDate nextMonthlyAnchor(LocalDate ref, int sipDay) {
+        LocalDate candidateThisMonth = clampToMonth(ref.getYear(), ref.getMonthValue(), sipDay);
+        if (!candidateThisMonth.isBefore(ref)) {
+            return candidateThisMonth;
+        }
+        LocalDate nextMonth = ref.plusMonths(1);
+        return clampToMonth(nextMonth.getYear(), nextMonth.getMonthValue(), sipDay);
+    }
+
+    /**
+     * Clamps day to the actual length of the given year/month — e.g. sipDay=31
+     * in February becomes the 28th (or 29th in a leap year). Standard AMC SIP
+     * behavior: the deduction still happens that month, just on the last valid day.
+     */
+    private static LocalDate clampToMonth(int year, int month, int day) {
+        YearMonth yearMonth = YearMonth.of(year, month);
+        int clampedDay = Math.min(day, yearMonth.lengthOfMonth());
+        return yearMonth.atDay(clampedDay);
     }
 
     /**

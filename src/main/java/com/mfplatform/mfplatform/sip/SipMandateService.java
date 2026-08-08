@@ -72,9 +72,13 @@ public class SipMandateService {
      *   2. No active SIP already exists for this folio/scheme pair
      *   3. startDate is not in the past
      *   4. endDate (if provided) is after startDate
+     *   5. sipDay is present (1-31) when frequency is MONTHLY, and absent
+     *      otherwise — WEEKLY/QUARTERLY use fixed calendar anchors, no
+     *      user-chosen day
      *
      * Generates a simulated mandate reference (NACH-style reference number).
-     * Sets nextDueDate = startDate — first installment on the start date.
+     * nextDueDate is the nearest schedule anchor on or after startDate —
+     * see SipMandate.computeFirstDueDate().
      */
     @Auditable(operation = "SIP_REGISTRATION")
     @Transactional
@@ -97,6 +101,26 @@ public class SipMandateService {
                     "SIP end date must be after the start date.");
         }
 
+        // Validate sipDay: required (and 1-31) for MONTHLY, must be absent for
+        // WEEKLY/QUARTERLY. The @Min/@Max on the DTO only fire via the
+        // controller's @Valid pipeline — this service is the source of truth
+        // for the business rule itself, same as the units/amount XOR check
+        // in RedemptionService, so it re-checks the range explicitly rather
+        // than trusting the annotation alone.
+        if (request.frequency() == SipFrequency.MONTHLY) {
+            if (request.sipDay() == null) {
+                throw new TransactionValidationException(
+                        "sipDay is required for MONTHLY SIPs (the day of the month deductions land on).");
+            }
+            if (request.sipDay() < 1 || request.sipDay() > 31) {
+                throw new TransactionValidationException(
+                        "sipDay must be between 1 and 31.");
+            }
+        }
+        // Don't trust a client-supplied sipDay for frequencies that shouldn't have one —
+        // WEEKLY/QUARTERLY always use their fixed anchors regardless of what was sent.
+        Integer sipDay = request.frequency() == SipFrequency.MONTHLY ? request.sipDay() : null;
+
         // Prevent duplicate active SIP for same folio/scheme
         if (sipMandateRepository.existsActiveMandateForFolioAndScheme(
                 request.folioId(), request.schemeId())) {
@@ -104,6 +128,9 @@ public class SipMandateService {
                     "An active SIP already exists for this folio and scheme. " +
                     "Cancel the existing SIP before registering a new one.");
         }
+
+        LocalDate firstDueDate = SipMandate.computeFirstDueDate(
+                request.startDate(), request.frequency(), sipDay);
 
         SipMandate mandate = sipMandateRepository.save(
                 SipMandate.builder()
@@ -113,7 +140,8 @@ public class SipMandateService {
                         .frequency(request.frequency())
                         .startDate(request.startDate())
                         .endDate(request.endDate())
-                        .nextDueDate(request.startDate()) // first installment = start date
+                        .sipDay(sipDay)
+                        .nextDueDate(firstDueDate)
                         .status(SipMandateStatus.ACTIVE)
                         .mandateReference(generateMandateReference())
                         .initiatedByUserId(actor.userId())
@@ -261,7 +289,42 @@ public class SipMandateService {
                 mandate.getNextDueDate(),
                 mandate.getStatus().name(),
                 mandate.getMandateReference(),
-                mandate.getCreatedAt()
+                mandate.getCreatedAt(),
+                buildScheduleDescription(mandate)
         );
+    }
+
+    /**
+     * Human-readable summary of the recurring schedule — computed once here
+     * so the frontend renders it verbatim with no frequency-specific display
+     * logic of its own.
+     *
+     * WEEKLY/QUARTERLY use fixed anchors, so their text is constant.
+     * MONTHLY interpolates the mandate's actual sipDay with the correct
+     * ordinal suffix (1st, 2nd, 3rd, 4th... 21st, 22nd, 23rd...).
+     */
+    private String buildScheduleDescription(SipMandate mandate) {
+        return switch (mandate.getFrequency()) {
+            case MONTHLY -> "Deducted on the " + ordinal(mandate.getSipDay()) + " of each month";
+            case WEEKLY -> "Deducted on the 7th, 14th, 21st, and 28th of each month";
+            case QUARTERLY -> "Deducted on the 8th of January, April, July, and October";
+        };
+    }
+
+    /**
+     * English ordinal suffix for a day-of-month number.
+     * 11th/12th/13th are always "th" regardless of their last digit — the
+     * usual exception to the "last digit decides" rule (1st, 2nd, 3rd, else th).
+     */
+    private String ordinal(int n) {
+        if (n % 100 >= 11 && n % 100 <= 13) {
+            return n + "th";
+        }
+        return switch (n % 10) {
+            case 1 -> n + "st";
+            case 2 -> n + "nd";
+            case 3 -> n + "rd";
+            default -> n + "th";
+        };
     }
 }

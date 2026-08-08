@@ -1,11 +1,14 @@
 package com.mfplatform.mfplatform.admin;
 
 import com.mfplatform.mfplatform.admin.dto.AdminDtos.*;
+import com.mfplatform.mfplatform.batch.SipBatchJobLauncher;
 import com.mfplatform.mfplatform.common.BusinessDateService;
 import com.mfplatform.mfplatform.transaction.EodProcessingService;
 import com.mfplatform.mfplatform.transaction.EodProcessingService.EodSummary;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.springframework.batch.core.JobExecution;
+import org.springframework.batch.core.StepExecution;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
@@ -31,12 +34,15 @@ public class AdminController {
 
     private final BusinessDateService businessDateService;
     private final EodProcessingService eodProcessingService;
+    private final SipBatchJobLauncher sipBatchJobLauncher;
 
     public AdminController(
             BusinessDateService businessDateService,
-            EodProcessingService eodProcessingService) {
+            EodProcessingService eodProcessingService,
+            SipBatchJobLauncher sipBatchJobLauncher) {
         this.businessDateService = businessDateService;
         this.eodProcessingService = eodProcessingService;
+        this.sipBatchJobLauncher = sipBatchJobLauncher;
     }
 
     /**
@@ -80,6 +86,32 @@ public class AdminController {
                 summary.allotted(),
                 summary.failed(),
                 summary.pendingNoNav()
+        ));
+    }
+
+    /**
+     * Manually triggers the SIP daily batch job for the current business date.
+     *
+     * The SIP batch normally only fires via a real-wall-clock 9 AM cron
+     * (SipBatchJobLauncher.scheduledRun()), which has no relationship to
+     * BusinessDateService's virtual date — advancing the business date alone
+     * never makes a SIP installment due. This endpoint calls the exact same
+     * job-launch logic on demand, same idempotency spirit as Run EOD
+     * (JobParameters include a timestamp so repeated manual runs on the same
+     * business date are always valid new job instances).
+     */
+    @PostMapping("/sip/run-batch")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<SipBatchRunResponse> runSipBatch() {
+        JobExecution execution = sipBatchJobLauncher.runManually();
+        StepExecution step = execution.getStepExecutions().stream().findFirst().orElse(null);
+
+        return ResponseEntity.ok(new SipBatchRunResponse(
+                execution.getStatus().toString(),
+                execution.getExitStatus().getExitCode(),
+                step != null ? step.getReadCount() : 0,
+                step != null ? step.getWriteCount() : 0,
+                step != null ? step.getSkipCount() : 0
         ));
     }
 }

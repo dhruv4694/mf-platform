@@ -28,7 +28,7 @@ import org.springframework.stereotype.Component;
  *
  * NEW (SipBatchJobLauncher):
  *   @Scheduled(cron = "0 0 9 * * *")
- *   public void runSipJob() {
+ *   public void scheduledRun() {
  *       jobLauncher.run(sipDailyJob, params); // delegates to Spring Batch
  *       // restart-capable (resumes from last committed chunk)
  *       // fault-tolerant (skips bad mandates, continues)
@@ -65,27 +65,54 @@ public class SipBatchJobLauncher {
     }
 
     /**
-     * Launches the SIP daily batch job every morning at 9:00 AM.
+     * Launches the SIP daily batch job every morning at 9:00 AM (real wall-clock
+     * time — this cron is independent of BusinessDateService's virtual date).
+     * Delegates to runManually() for the actual launch; failures are logged
+     * and swallowed here so a bad run doesn't crash the scheduler.
+     */
+    @Scheduled(cron = "0 0 9 * * *")
+    public void scheduledRun() {
+        try {
+            runManually();
+        } catch (Exception ex) {
+            // Log but don't rethrow — a failed job launch shouldn't crash the scheduler.
+            // The failure is already recorded in BATCH_JOB_EXECUTION by Spring Batch.
+            log.error("Scheduled SIP batch job failed: {}", ex.getMessage(), ex);
+        }
+    }
+
+    /**
+     * Launches the SIP daily batch job for the current business date.
+     *
+     * Callable directly — used by AdminController's manual "Run SIP Batch"
+     * trigger, since this project runs on a virtual BusinessDateService
+     * rather than the real clock: advancing the business date has no effect
+     * on the 9 AM cron above, so demoing SIP end-to-end needs an on-demand
+     * way to fire the same job.
      *
      * This replaces the @Scheduled method in SipExecutionService.
-     * The business logic (what to do for each mandate) moved to:
+     * The business logic (what to do for each mandate) lives in:
      *   SipItemReader    → which mandates
      *   SipItemProcessor → what to do per mandate
      *   SipItemWriter    → how to persist the result
      *
-     * runDate parameter: today's date as a string.
-     * Ensures a unique BATCH_JOB_INSTANCE per day.
+     * runDate parameter: the current business date as a string.
+     * triggeredAt: a timestamp added to keep JobParameters unique — Spring
+     * Batch rejects identical parameters for a completed job instance, and
+     * a manual trigger on the same business date must be genuinely
+     * re-runnable (same idempotency spirit as Run EOD).
+     *
+     * @throws IllegalStateException if the job fails to launch — callers
+     *         (AdminController) should see this as a real error, unlike the
+     *         scheduled path which swallows it.
      */
-    @Scheduled(cron = "0 0 9 * * *")
-    public void runSipJob() {
+    public JobExecution runManually() {
         String runDate = businessDateService.today().toString();
         log.info("Triggering SIP daily batch job for runDate={}", runDate);
 
         try {
             JobParameters params = new JobParametersBuilder()
                     .addString("runDate", runDate)
-                    // Adding current timestamp ensures uniqueness even if the job
-                    // is manually re-triggered on the same day (for testing)
                     .addLong("triggeredAt", System.currentTimeMillis())
                     .toJobParameters();
 
@@ -95,10 +122,10 @@ public class SipBatchJobLauncher {
                     execution.getStatus(),
                     execution.getExitStatus().getExitCode());
 
+            return execution;
         } catch (Exception ex) {
-            // Log but don't rethrow — a failed job launch shouldn't crash the scheduler
-            // The failure is already recorded in BATCH_JOB_EXECUTION by Spring Batch
             log.error("Failed to launch SIP batch job for {}: {}", runDate, ex.getMessage(), ex);
+            throw new IllegalStateException("Failed to launch SIP batch job for " + runDate, ex);
         }
     }
 }
