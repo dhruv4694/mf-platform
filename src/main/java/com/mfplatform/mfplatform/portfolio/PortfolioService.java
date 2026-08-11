@@ -1,5 +1,6 @@
 package com.mfplatform.mfplatform.portfolio;
 
+import com.mfplatform.mfplatform.common.BusinessDateService;
 import com.mfplatform.mfplatform.common.FinancialCalculations;
 import com.mfplatform.mfplatform.folio.Folio;
 import com.mfplatform.mfplatform.folio.FolioRepository;
@@ -57,6 +58,7 @@ public class PortfolioService {
     private final FolioRepository folioRepository;
     private final InvestorRepository investorRepository;
     private final SipMandateRepository sipMandateRepository;
+    private final BusinessDateService businessDateService;
 
     public PortfolioService(
             HoldingRepository holdingRepository,
@@ -65,7 +67,8 @@ public class PortfolioService {
             SchemeRepository schemeRepository,
             FolioRepository folioRepository,
             InvestorRepository investorRepository,
-            SipMandateRepository sipMandateRepository) {
+            SipMandateRepository sipMandateRepository,
+            BusinessDateService businessDateService) {
         this.holdingRepository = holdingRepository;
         this.transactionRepository = transactionRepository;
         this.navHistoryRepository = navHistoryRepository;
@@ -73,6 +76,7 @@ public class PortfolioService {
         this.folioRepository = folioRepository;
         this.investorRepository = investorRepository;
         this.sipMandateRepository = sipMandateRepository;
+        this.businessDateService = businessDateService;
     }
 
     // ─── Investor portfolio ───────────────────────────────────────────────────
@@ -155,8 +159,13 @@ public class PortfolioService {
                 .map(HoldingView::investedAmount)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
+        // currentValue is null for holdings with no NAV yet (see HoldingView) —
+        // those simply don't contribute to the total rather than forcing the
+        // whole folio total to null. The per-holding "unavailable" signal is
+        // what matters for display; the aggregate stays a best-effort sum.
         BigDecimal totalCurrent = holdingViews.stream()
                 .map(HoldingView::currentValue)
+                .filter(v -> v != null)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
         BigDecimal totalReturn = totalInvested.compareTo(BigDecimal.ZERO) > 0
@@ -197,21 +206,29 @@ public class PortfolioService {
                 .orElseThrow(() -> new RuntimeException(
                         "Scheme not found: " + holding.getSchemeId()));
 
-        // Latest NAV for this scheme
+        // Latest NAV for this scheme, as of the platform's current business
+        // date — NOT the real system clock. This app is driven throughout by
+        // BusinessDateService (EOD settlement, SIP due dates, NAV lookup at
+        // settlement time all key off it); the business date is routinely
+        // ahead of the real calendar date by design. Using LocalDate.now()
+        // here meant "latest NAV on or before today" silently missed NAV rows
+        // dated later than the real date, even though EOD had already applied
+        // exactly those rows to settle the transaction.
         var latestNav = navHistoryRepository
-                .findLatestNavOnOrBefore(holding.getSchemeId(), LocalDate.now())
+                .findLatestNavOnOrBefore(holding.getSchemeId(), businessDateService.today())
                 .orElse(null);
 
-        BigDecimal latestNavValue = latestNav != null
-                ? latestNav.getNavValue() : BigDecimal.ZERO;
-        LocalDate latestNavDate = latestNav != null
-                ? latestNav.getNavDate() : null;
+        // No NAV found → current value is genuinely unknown, not zero. See
+        // HoldingView's javadoc: units held is always correct (stored, only
+        // updated at EOD), but current value must never be stored or defaulted
+        // — it's null here on purpose so the frontend can render "NAV pending"
+        // instead of a false ₹0.00 / 100% loss.
+        BigDecimal latestNavValue = latestNav != null ? latestNav.getNavValue() : null;
+        LocalDate latestNavDate = latestNav != null ? latestNav.getNavDate() : null;
 
-        // Current value = units held × latest NAV
-        BigDecimal currentValue = latestNavValue.compareTo(BigDecimal.ZERO) > 0
-                ? FinancialCalculations.calculateCurrentValue(
-                        holding.getUnitsHeld(), latestNavValue)
-                : BigDecimal.ZERO;
+        BigDecimal currentValue = latestNavValue != null
+                ? FinancialCalculations.calculateCurrentValue(holding.getUnitsHeld(), latestNavValue)
+                : null;
 
         // Invested amount: sum ALLOTTED purchase amounts, minus REVERSED
         // STREAMS: filter by type + status, sum amounts
@@ -233,10 +250,12 @@ public class PortfolioService {
 
         investedAmount = investedAmount.subtract(reversedAmount);
 
-        // Absolute return %
-        BigDecimal absoluteReturnPct = investedAmount.compareTo(BigDecimal.ZERO) > 0
+        // Absolute return % — null whenever currentValue is null. A return
+        // percentage computed against an unknown current value is meaningless,
+        // not just unavailable, so it must not default to ZERO either.
+        BigDecimal absoluteReturnPct = (currentValue != null && investedAmount.compareTo(BigDecimal.ZERO) > 0)
                 ? FinancialCalculations.calculateAbsoluteReturn(currentValue, investedAmount)
-                : BigDecimal.ZERO;
+                : (currentValue != null ? BigDecimal.ZERO : null);
 
         return new HoldingView(
                 holding.getId(),
@@ -362,9 +381,11 @@ public class PortfolioService {
         for (Holding holding : holdings) {
             if (!holding.hasUnits()) continue;
 
-            // Latest NAV for current value
+            // Latest NAV for current value — same business-date fix as
+            // buildHoldingView() above; see its comment for why LocalDate.now()
+            // was wrong here.
             var latestNav = navHistoryRepository
-                    .findLatestNavOnOrBefore(holding.getSchemeId(), LocalDate.now())
+                    .findLatestNavOnOrBefore(holding.getSchemeId(), businessDateService.today())
                     .orElse(null);
 
             if (latestNav != null) {

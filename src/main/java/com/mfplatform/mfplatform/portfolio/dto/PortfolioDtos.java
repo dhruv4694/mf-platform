@@ -30,13 +30,22 @@ public class PortfolioDtos {
             // for this folio/scheme, minus REVERSED ones
             BigDecimal investedAmount,
 
-            // Derived: currentValue = unitsHeld × latestNav
+            // Derived: currentValue = unitsHeld × latestNav.
+            // NULL — not ZERO — when no NAV exists yet for this scheme as of the
+            // current business date. Units held are always correct (only ever
+            // updated at EOD settlement); current value is never stored, always
+            // computed fresh at read time, and a missing NAV means "not known
+            // yet", not "worth nothing". Collapsing that distinction into ZERO
+            // is exactly what produced a false 100% loss on the dashboard.
             BigDecimal currentValue,
 
             // Derived: absoluteReturn = (currentValue - investedAmount) / investedAmount × 100
+            // NULL whenever currentValue is null — a return percentage against
+            // an unknown current value is meaningless, not just unavailable.
             BigDecimal absoluteReturnPct,
 
-            // The NAV used for currentValue calculation
+            // The NAV used for currentValue calculation — null under the same
+            // condition as currentValue.
             BigDecimal latestNavValue,
             LocalDate latestNavDate
     ) {}
