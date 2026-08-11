@@ -84,7 +84,7 @@ docker-compose.yml                         # local Postgres
 ## What's implemented so far
 
 - **Auth**: JWT login (`POST /auth/login`), refresh (`POST /auth/refresh`), public investor self-signup (`POST /auth/signup/investor`)
-- **Bootstrap**: a default `ADMIN` account is auto-seeded on first startup (see `DataSeeder`) — username/password configurable via `SEED_ADMIN_USERNAME`/`SEED_ADMIN_PASSWORD` env vars, defaults to `admin` / `ChangeMe123!`. **Change this before any real deployment.**
+- **Bootstrap**: a default `ADMIN` account is auto-seeded on first startup (see `DataSeeder`) — username/password configurable via `SEED_ADMIN_USERNAME`/`SEED_ADMIN_PASSWORD` env vars. Local-dev-only default credentials are documented in `docs/LOCAL_SETUP.md`, not here. **Change this before any real deployment.**
 - **Investor module**: role-scoped listing (`GET /investors`), self-view (`GET /investors/me`), single view with ownership check (`GET /investors/{id}`), privileged add (`POST /investors`)
 - **Distributor module**: admin-only listing/add, self-view (`GET /distributors/me`)
 - **Security**: stateless JWT auth, `@PreAuthorize` on every endpoint, row-level scoping baked into service queries (not just endpoint-level role checks)
@@ -92,16 +92,10 @@ docker-compose.yml                         # local Postgres
 
 ## Trying it out once running
 
-```bash
-# Login as the seeded admin
-curl -X POST http://localhost:8080/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"ChangeMe123!"}'
-
-# Use the returned accessToken as a Bearer token for everything else
-curl http://localhost:8080/api/v1/investors \
-  -H "Authorization: Bearer <accessToken>"
-```
+Admin access is restricted during the live demo — sign up as an investor or
+distributor to explore the app. For local development, see `docs/LOCAL_SETUP.md`
+for the seeded admin credentials and a full walkthrough (login, Bearer token,
+seeding demo data).
 
 ## Next steps (Phase 3)
 
