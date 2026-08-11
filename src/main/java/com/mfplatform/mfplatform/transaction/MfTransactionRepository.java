@@ -27,17 +27,27 @@ public interface MfTransactionRepository extends JpaRepository<MfTransaction, Lo
     Optional<MfTransaction> findByIdempotencyKey(String idempotencyKey);
 
     /**
-     * All transactions for a given folio, newest first.
-     * Used by the INVESTOR role in GET /transactions/my.
+     * All transactions for a given folio, business date descending.
+     * Not currently called (TransactionService uses the multi-folio variant
+     * below even for a single-folio INVESTOR) — kept in sync with the same
+     * businessDate-descending convention regardless.
+     *
+     * Sorted by businessDate, not requestedAt/creation order — this project
+     * reasons about time purely in terms of businessDate everywhere else
+     * (EOD settlement, NAV lookup, SIP due dates), and businessDate can move
+     * backward (BusinessDateService.advance() permits it), so a transaction
+     * created later in real time can legitimately have an earlier businessDate
+     * than one created before it.
      */
-    Page<MfTransaction> findByFolioIdOrderByRequestedAtDesc(Long folioId, Pageable pageable);
+    Page<MfTransaction> findByFolioIdOrderByBusinessDateDesc(Long folioId, Pageable pageable);
 
     /**
-     * All transactions for a set of folios, newest first.
+     * All transactions for a set of folios, business date descending.
      * Used by DISTRIBUTOR role (their full client book) and ADMIN
-     * in GET /transactions/my.
+     * in GET /transactions/my. See findByFolioIdOrderByBusinessDateDesc()
+     * for why businessDate, not requestedAt.
      */
-    Page<MfTransaction> findByFolioIdInOrderByRequestedAtDesc(
+    Page<MfTransaction> findByFolioIdInOrderByBusinessDateDesc(
             List<Long> folioIds, Pageable pageable);
 
     /**

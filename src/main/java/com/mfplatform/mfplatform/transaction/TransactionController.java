@@ -8,6 +8,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -107,6 +108,13 @@ public class TransactionController {
      * Returns transactions scoped to the caller's role.
      * ADMIN: all transactions. DISTRIBUTOR: client book. INVESTOR: own folios.
      * Paginated — always pass page/size params to avoid unbounded queries.
+     *
+     * Sorted by businessDate descending — consistent with how the rest of the
+     * system (EOD settlement, NAV lookup, SIP due dates) reasons about time
+     * purely in terms of businessDate, never creation order. Since the
+     * business date can move backward (see BusinessDateService), sorting by
+     * database insertion order would show transactions out of chronological
+     * sequence relative to their own businessDate.
      */
     @Operation(
         summary = "List transactions",
@@ -117,7 +125,7 @@ public class TransactionController {
     @PreAuthorize("isAuthenticated()")
     public ResponseEntity<Page<TransactionResponse>> getMyTransactions(
             Authentication authentication,
-            @PageableDefault(size = 20, sort = "requestedAt") Pageable pageable) {
+            @PageableDefault(size = 20, sort = "businessDate", direction = Sort.Direction.DESC) Pageable pageable) {
         return ResponseEntity.ok(
                 transactionService.getMyTransactions(authentication, pageable));
     }

@@ -126,7 +126,7 @@ public class TransactionService {
                         .map(f -> f.getId())
                         .toList();
                 yield transactionRepository
-                        .findByFolioIdInOrderByRequestedAtDesc(folioIds, pageable)
+                        .findByFolioIdInOrderByBusinessDateDesc(folioIds, pageable)
                         .map(this::toResponse);
             }
 
@@ -138,7 +138,7 @@ public class TransactionService {
                         .map(f -> f.getId())
                         .toList();
                 yield transactionRepository
-                        .findByFolioIdInOrderByRequestedAtDesc(folioIds, pageable)
+                        .findByFolioIdInOrderByBusinessDateDesc(folioIds, pageable)
                         .map(this::toResponse);
             }
         };
@@ -176,7 +176,8 @@ public class TransactionService {
                 txn.getInitiatedByRole().name(),
                 txn.getRequestedAt(),
                 txn.getProcessedAt(),
-                txn.getBusinessDate()
+                txn.getBusinessDate(),
+                txn.getSipMandateId()
         );
     }
 }

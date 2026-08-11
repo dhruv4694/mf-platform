@@ -77,6 +77,7 @@ public class TransactionDtos {
             String initiatedByRole,
             Instant requestedAt,
             Instant processedAt,
-            LocalDate businessDate
+            LocalDate businessDate,
+            Long sipMandateId
     ) {}
 }

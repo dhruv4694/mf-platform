@@ -160,7 +160,8 @@ public class PurchaseService {
                 transaction.getInitiatedByRole().name(),
                 transaction.getRequestedAt(),
                 transaction.getProcessedAt(),
-                transaction.getBusinessDate()
+                transaction.getBusinessDate(),
+                transaction.getSipMandateId()
         );
     }
 }

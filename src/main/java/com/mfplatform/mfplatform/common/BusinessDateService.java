@@ -44,19 +44,19 @@ public class BusinessDateService {
     }
 
     /**
-     * Advances the business date to the given date.
+     * Sets the platform's business date to the given date.
      *
-     * @param next the new business date — must not be before the current one.
-     *             Business dates move forward only, mirroring how a real AMC's
-     *             books advance one day at a time.
-     * @throws IllegalArgumentException if next is before the current business date
+     * Backward movement IS permitted — deliberately. This project has no
+     * point-in-time historical portfolio reporting, so the only real
+     * consequence of backdating is display ordering, which is handled at the
+     * source by sorting transaction listings on businessDate rather than by
+     * disallowing the underlying action. Settlement mechanics are unaffected
+     * either way: EOD's NAV lookup is an exact match on (schemeId,
+     * businessDate) regardless of when a transaction was created in real time.
+     *
+     * @param next the new business date, forward or backward
      */
     public void advance(LocalDate next) {
-        LocalDate current = currentDate.get();
-        if (next.isBefore(current)) {
-            throw new IllegalArgumentException(
-                    "Cannot move business date backwards: current=" + current + ", requested=" + next);
-        }
         currentDate.set(next);
     }
 }
