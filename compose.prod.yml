@@ -74,8 +74,19 @@ services:
       SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD}
       SPRING_DATA_REDIS_HOST:     redis
       SPRING_DATA_REDIS_PORT:     6379
-      MAIL_HOST:                  mailhog
-      MAIL_PORT:                  1025
+      # Defaults to MailHog (no auth/TLS needed) — override every MAIL_* var
+      # in .env to use a real SMTP provider (e.g. Gmail: smtp.gmail.com, port
+      # 587, your Gmail address as MAIL_USERNAME, an App Password — not your
+      # regular password — as MAIL_PASSWORD, both auth and starttls true).
+      # NOTIFICATION_EMAIL_FROM should match MAIL_USERNAME for Gmail — it
+      # rejects/overrides a From address that isn't the authenticated account.
+      MAIL_HOST:                  ${MAIL_HOST:-mailhog}
+      MAIL_PORT:                  ${MAIL_PORT:-1025}
+      MAIL_USERNAME:              ${MAIL_USERNAME:-}
+      MAIL_PASSWORD:              ${MAIL_PASSWORD:-}
+      MAIL_SMTP_AUTH:             ${MAIL_SMTP_AUTH:-false}
+      MAIL_STARTTLS:              ${MAIL_STARTTLS:-false}
+      NOTIFICATION_EMAIL_FROM:    ${NOTIFICATION_EMAIL_FROM:-noreply@mfplatform.com}
       JWT_SECRET:                 ${JWT_SECRET:?JWT_SECRET is required}
       SEED_ADMIN_USERNAME:        ${SEED_ADMIN_USERNAME:-admin}
       SEED_ADMIN_PASSWORD:        ${SEED_ADMIN_PASSWORD:?SEED_ADMIN_PASSWORD is required}
