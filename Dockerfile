@@ -34,15 +34,20 @@ FROM eclipse-temurin:17-jre-alpine AS runtime
 
 # Non-root user for security — never run production containers as root
 RUN addgroup -S mfplatform && adduser -S mfplatform -G mfplatform
-USER mfplatform
 
 WORKDIR /app
 
-# Copy only the fat JAR from the builder stage
-COPY --from=builder /build/target/*.jar app.jar
+# Create logs directory (AuditAspect + logback write here) and hand the whole
+# app dir to the non-root user WHILE STILL ROOT — mkdir/chown need root
+# privileges, so this must happen before USER switches away from root.
+RUN mkdir -p /app/logs && chown -R mfplatform:mfplatform /app
 
-# Create logs directory (AuditAspect + logback write here)
-RUN mkdir -p /app/logs
+USER mfplatform
+
+# Copy only the fat JAR from the builder stage, owned by the runtime user
+# (COPY ignores USER and defaults to root otherwise, which would leave the
+# jar unreadable-but-fine and every other /app write still root-owned).
+COPY --from=builder --chown=mfplatform:mfplatform /build/target/*.jar app.jar
 
 # 8080 is the default Spring Boot port
 EXPOSE 8080
