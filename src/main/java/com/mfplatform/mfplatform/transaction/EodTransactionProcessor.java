@@ -2,8 +2,10 @@ package com.mfplatform.mfplatform.transaction;
 
 import com.mfplatform.mfplatform.nav.NavHistory;
 import com.mfplatform.mfplatform.nav.NavHistoryRepository;
+import com.mfplatform.mfplatform.notification.event.ApplicationEvents.TransactionSettledEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,16 +39,19 @@ public class EodTransactionProcessor {
     private final NavHistoryRepository navHistoryRepository;
     private final PaymentSimulationService paymentSimulationService;
     private final UnitAllotmentService unitAllotmentService;
+    private final ApplicationEventPublisher eventPublisher;
 
     public EodTransactionProcessor(
             MfTransactionRepository transactionRepository,
             NavHistoryRepository navHistoryRepository,
             PaymentSimulationService paymentSimulationService,
-            UnitAllotmentService unitAllotmentService) {
+            UnitAllotmentService unitAllotmentService,
+            ApplicationEventPublisher eventPublisher) {
         this.transactionRepository = transactionRepository;
         this.navHistoryRepository = navHistoryRepository;
         this.paymentSimulationService = paymentSimulationService;
         this.unitAllotmentService = unitAllotmentService;
+        this.eventPublisher = eventPublisher;
     }
 
     /**
@@ -94,9 +99,13 @@ public class EodTransactionProcessor {
         if (result instanceof AllotmentResult.Success s) {
             log.info("EOD: transaction {} allotted {} units at NAV {}",
                     transactionId, s.allottedUnits(), s.applicableNavValue());
+            eventPublisher.publishEvent(new TransactionSettledEvent(
+                    this, transactionRepository.findById(transactionId).orElseThrow(), null));
             return EodOutcome.ALLOTTED;
         } else if (result instanceof AllotmentResult.Failed f) {
             log.error("EOD: transaction {} allotment failed: {}", transactionId, f.reason());
+            eventPublisher.publishEvent(new TransactionSettledEvent(
+                    this, transactionRepository.findById(transactionId).orElseThrow(), f.reason()));
             return EodOutcome.FAILED;
         } else if (result instanceof AllotmentResult.Pending p) {
             // Unexpected in EOD's single-threaded batch loop — nothing else

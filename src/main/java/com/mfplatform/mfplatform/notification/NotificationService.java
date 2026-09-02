@@ -1,8 +1,17 @@
 package com.mfplatform.mfplatform.notification;
 
+import com.mfplatform.mfplatform.folio.Folio;
+import com.mfplatform.mfplatform.folio.FolioRepository;
+import com.mfplatform.mfplatform.investor.Investor;
+import com.mfplatform.mfplatform.investor.InvestorRepository;
 import com.mfplatform.mfplatform.notification.channel.NotificationChannel;
 import com.mfplatform.mfplatform.notification.dto.NotificationPayload;
 import com.mfplatform.mfplatform.notification.event.ApplicationEvents.*;
+import com.mfplatform.mfplatform.scheme.Scheme;
+import com.mfplatform.mfplatform.scheme.SchemeRepository;
+import com.mfplatform.mfplatform.sip.SipMandate;
+import com.mfplatform.mfplatform.sip.SipMandateRepository;
+import com.mfplatform.mfplatform.transaction.MfTransaction;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Async;
@@ -56,11 +65,23 @@ public class NotificationService {
      */
     private final List<NotificationChannel> channels;
     private final NotificationRepository    notificationRepository;
+    private final FolioRepository           folioRepository;
+    private final InvestorRepository        investorRepository;
+    private final SchemeRepository          schemeRepository;
+    private final SipMandateRepository      sipMandateRepository;
 
     public NotificationService(List<NotificationChannel> channels,
-                                NotificationRepository notificationRepository) {
+                                NotificationRepository notificationRepository,
+                                FolioRepository folioRepository,
+                                InvestorRepository investorRepository,
+                                SchemeRepository schemeRepository,
+                                SipMandateRepository sipMandateRepository) {
         this.channels = channels;
         this.notificationRepository = notificationRepository;
+        this.folioRepository = folioRepository;
+        this.investorRepository = investorRepository;
+        this.schemeRepository = schemeRepository;
+        this.sipMandateRepository = sipMandateRepository;
         log.info("NotificationService initialized with {} channel(s): {}",
                 channels.size(),
                 channels.stream().map(NotificationChannel::channelName).toList());
@@ -123,6 +144,115 @@ public class NotificationService {
                 NotificationPayload.distributorActivated(event.getDistributor());
         dispatch(payload);
     }
+
+    /**
+     * Sends a "your request has been received" notification when a PENDING
+     * purchase/redemption transaction is created (manual or SIP-originated).
+     *
+     * Triggered by: PurchaseService.createPurchase() / RedemptionService.createRedemption()
+     */
+    @Async
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onTransactionCreated(TransactionCreatedEvent event) {
+        MfTransaction transaction = event.getTransaction();
+        log.info("Processing TRANSACTION_CREATED notification for transaction {}", transaction.getId());
+
+        TransactionContext ctx = resolveTransactionContext(transaction);
+        if (ctx == null) {
+            return;
+        }
+
+        NotificationPayload payload = NotificationPayload.transactionCreated(
+                transaction, ctx.investor(), ctx.folio(), ctx.scheme(), ctx.sipMandateReference());
+        dispatch(payload);
+    }
+
+    /**
+     * Sends a settlement-outcome notification (ALLOTTED or FAILED) when EOD
+     * finishes processing a transaction.
+     *
+     * Triggered by: EodTransactionProcessor.processOne()
+     */
+    @Async
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onTransactionSettled(TransactionSettledEvent event) {
+        MfTransaction transaction = event.getTransaction();
+        log.info("Processing TRANSACTION_SETTLED notification for transaction {}", transaction.getId());
+
+        TransactionContext ctx = resolveTransactionContext(transaction);
+        if (ctx == null) {
+            return;
+        }
+
+        NotificationPayload payload = NotificationPayload.transactionSettled(
+                transaction, ctx.investor(), ctx.folio(), ctx.scheme(),
+                ctx.sipMandateReference(), event.getFailureReason());
+        dispatch(payload);
+    }
+
+    /**
+     * Sends a confirmation notification when a new SIP mandate is registered.
+     *
+     * Triggered by: SipMandateService.register()
+     */
+    @Async
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onSipMandateCreated(SipMandateCreatedEvent event) {
+        SipMandate mandate = event.getMandate();
+        log.info("Processing SIP_MANDATE_CREATED notification for mandate {}", mandate.getId());
+
+        Folio folio = folioRepository.findById(mandate.getFolioId()).orElse(null);
+        if (folio == null) {
+            log.warn("SIP_MANDATE_CREATED: folio {} not found for mandate {} — skipping notification",
+                    mandate.getFolioId(), mandate.getId());
+            return;
+        }
+        Investor investor = investorRepository.findById(folio.getInvestorId()).orElse(null);
+        Scheme scheme = schemeRepository.findById(mandate.getSchemeId()).orElse(null);
+        if (investor == null || scheme == null) {
+            log.warn("SIP_MANDATE_CREATED: missing investor/scheme for mandate {} — skipping notification",
+                    mandate.getId());
+            return;
+        }
+
+        NotificationPayload payload = NotificationPayload.sipMandateCreated(
+                mandate, investor, scheme, event.getScheduleDescription());
+        dispatch(payload);
+    }
+
+    /**
+     * Resolves the folio/investor/scheme/SIP-mandate-reference context shared
+     * by both transaction-related listeners. Returns null (logging a warning)
+     * if any required entity is missing — this can only happen if the folio
+     * or scheme was deleted between transaction creation and notification
+     * dispatch, which doesn't happen in this platform's actual flows, but the
+     * listener still needs to fail safe rather than throw on the async thread.
+     */
+    private TransactionContext resolveTransactionContext(MfTransaction transaction) {
+        Folio folio = folioRepository.findById(transaction.getFolioId()).orElse(null);
+        if (folio == null) {
+            log.warn("Folio {} not found for transaction {} — skipping notification",
+                    transaction.getFolioId(), transaction.getId());
+            return null;
+        }
+        Investor investor = investorRepository.findById(folio.getInvestorId()).orElse(null);
+        Scheme scheme = schemeRepository.findById(transaction.getSchemeId()).orElse(null);
+        if (investor == null || scheme == null) {
+            log.warn("Missing investor/scheme for transaction {} — skipping notification",
+                    transaction.getId());
+            return null;
+        }
+
+        String sipMandateReference = transaction.getSipMandateId() != null
+                ? sipMandateRepository.findById(transaction.getSipMandateId())
+                        .map(SipMandate::getMandateReference)
+                        .orElse(null)
+                : null;
+
+        return new TransactionContext(investor, folio, scheme, sipMandateReference);
+    }
+
+    private record TransactionContext(Investor investor, Folio folio, Scheme scheme, String sipMandateReference) {}
 
     // ─── Dispatch ─────────────────────────────────────────────────────────────
 

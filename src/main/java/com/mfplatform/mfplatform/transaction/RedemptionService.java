@@ -8,6 +8,7 @@ import com.mfplatform.mfplatform.folio.FolioRepository;
 import com.mfplatform.mfplatform.investor.Investor;
 import com.mfplatform.mfplatform.investor.InvestorNotFoundException;
 import com.mfplatform.mfplatform.investor.InvestorRepository;
+import com.mfplatform.mfplatform.notification.event.ApplicationEvents.TransactionCreatedEvent;
 import com.mfplatform.mfplatform.scheme.Scheme;
 import com.mfplatform.mfplatform.scheme.SchemeNotFoundException;
 import com.mfplatform.mfplatform.scheme.SchemeRepository;
@@ -17,6 +18,7 @@ import com.mfplatform.mfplatform.transaction.validation.RedemptionValidationChai
 import com.mfplatform.mfplatform.transaction.validation.TransactionValidationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -59,6 +61,7 @@ public class RedemptionService {
     private final HoldingService holdingService;
     private final RedemptionValidationChain validationChain;
     private final BusinessDateService businessDateService;
+    private final ApplicationEventPublisher eventPublisher;
 
     public RedemptionService(
             MfTransactionRepository transactionRepository,
@@ -67,7 +70,8 @@ public class RedemptionService {
             SchemeRepository schemeRepository,
             HoldingService holdingService,
             RedemptionValidationChain validationChain,
-            BusinessDateService businessDateService) {
+            BusinessDateService businessDateService,
+            ApplicationEventPublisher eventPublisher) {
         this.transactionRepository = transactionRepository;
         this.investorRepository = investorRepository;
         this.folioRepository = folioRepository;
@@ -75,6 +79,7 @@ public class RedemptionService {
         this.holdingService = holdingService;
         this.validationChain = validationChain;
         this.businessDateService = businessDateService;
+        this.eventPublisher = eventPublisher;
     }
 
     /**
@@ -134,6 +139,8 @@ public class RedemptionService {
 
         log.info("Created PENDING redemption transaction {} for folio {} scheme {} businessDate {}",
                 transaction.getId(), request.folioId(), request.schemeId(), transaction.getBusinessDate());
+
+        eventPublisher.publishEvent(new TransactionCreatedEvent(this, transaction));
 
         return toResponse(transaction);
     }

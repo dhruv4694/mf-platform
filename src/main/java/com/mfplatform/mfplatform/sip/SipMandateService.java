@@ -5,10 +5,12 @@ import com.mfplatform.mfplatform.common.BusinessDateService;
 import com.mfplatform.mfplatform.common.OwnershipValidator;
 import com.mfplatform.mfplatform.common.Role;
 import com.mfplatform.mfplatform.folio.FolioRepository;
+import com.mfplatform.mfplatform.notification.event.ApplicationEvents.SipMandateCreatedEvent;
 import com.mfplatform.mfplatform.security.ActorContext;
 import com.mfplatform.mfplatform.security.CurrentUserResolver;
 import com.mfplatform.mfplatform.sip.dto.SipDtos.*;
 import com.mfplatform.mfplatform.transaction.validation.TransactionValidationException;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.access.AccessDeniedException;
@@ -48,18 +50,21 @@ public class SipMandateService {
     private final CurrentUserResolver currentUserResolver;
     private final OwnershipValidator ownershipValidator;
     private final BusinessDateService businessDateService;
+    private final ApplicationEventPublisher eventPublisher;
 
     public SipMandateService(
             SipMandateRepository sipMandateRepository,
             FolioRepository folioRepository,
             CurrentUserResolver currentUserResolver,
             OwnershipValidator ownershipValidator,
-            BusinessDateService businessDateService) {
+            BusinessDateService businessDateService,
+            ApplicationEventPublisher eventPublisher) {
         this.sipMandateRepository = sipMandateRepository;
         this.folioRepository = folioRepository;
         this.currentUserResolver = currentUserResolver;
         this.ownershipValidator = ownershipValidator;
         this.businessDateService = businessDateService;
+        this.eventPublisher = eventPublisher;
     }
 
     // ─── Registration ─────────────────────────────────────────────────────────
@@ -148,6 +153,9 @@ public class SipMandateService {
                         .createdAt(Instant.now())
                         .build()
         );
+
+        String scheduleDescription = buildScheduleDescription(mandate);
+        eventPublisher.publishEvent(new SipMandateCreatedEvent(this, mandate, scheduleDescription));
 
         return toResponse(mandate);
     }

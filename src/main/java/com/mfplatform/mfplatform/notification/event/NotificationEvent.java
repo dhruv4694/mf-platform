@@ -42,5 +42,14 @@ public enum NotificationEvent {
     SIP_INSTALLMENT_BOUNCED,
 
     /** SIP mandate completed (end date passed) */
-    SIP_COMPLETED
+    SIP_COMPLETED,
+
+    /** A PENDING transaction (purchase or redemption, manual or SIP-originated) was created */
+    TRANSACTION_CREATED,
+
+    /** A transaction reached a terminal EOD settlement outcome (ALLOTTED or FAILED) */
+    TRANSACTION_SETTLED,
+
+    /** A new SIP mandate was registered */
+    SIP_MANDATE_CREATED
 }

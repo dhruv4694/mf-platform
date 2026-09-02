@@ -8,9 +8,13 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
+
+import com.mfplatform.mfplatform.notification.event.ApplicationEvents.TransactionSettledEvent;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -42,6 +46,7 @@ class EodTransactionProcessorTest {
     @Mock private NavHistoryRepository navHistoryRepository;
     @Mock private PaymentSimulationService paymentSimulationService;
     @Mock private UnitAllotmentService unitAllotmentService;
+    @Mock private ApplicationEventPublisher eventPublisher;
 
     @InjectMocks
     private EodTransactionProcessor eodTransactionProcessor;
@@ -119,6 +124,11 @@ class EodTransactionProcessorTest {
         // applyNav was called with the exact NAV row found by the pre-check —
         // no NavEligibilityService anywhere in this pipeline.
         assertThat(pendingPurchase.getApplicableNav()).isEqualTo(nav);
+
+        ArgumentCaptor<TransactionSettledEvent> eventCaptor =
+                ArgumentCaptor.forClass(TransactionSettledEvent.class);
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue().getFailureReason()).isNull();
     }
 
     @Test
@@ -164,5 +174,11 @@ class EodTransactionProcessorTest {
         EodOutcome outcome = eodTransactionProcessor.processOne(TXN_ID, BUSINESS_DATE);
 
         assertThat(outcome).isEqualTo(EodOutcome.FAILED);
+
+        ArgumentCaptor<TransactionSettledEvent> eventCaptor =
+                ArgumentCaptor.forClass(TransactionSettledEvent.class);
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue().getFailureReason())
+                .isEqualTo("Holding update failed after 3 retries");
     }
 }

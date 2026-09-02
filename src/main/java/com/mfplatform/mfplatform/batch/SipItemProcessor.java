@@ -1,11 +1,13 @@
 package com.mfplatform.mfplatform.batch;
 
 import com.mfplatform.mfplatform.common.BusinessDateService;
+import com.mfplatform.mfplatform.notification.event.ApplicationEvents.TransactionCreatedEvent;
 import com.mfplatform.mfplatform.sip.SipMandate;
 import com.mfplatform.mfplatform.transaction.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.batch.item.ItemProcessor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 
 import java.util.UUID;
@@ -48,12 +50,15 @@ public class SipItemProcessor implements ItemProcessor<SipMandate, SipInstallmen
 
     private final MfTransactionRepository transactionRepository;
     private final BusinessDateService businessDateService;
+    private final ApplicationEventPublisher eventPublisher;
 
     public SipItemProcessor(
             MfTransactionRepository transactionRepository,
-            BusinessDateService businessDateService) {
+            BusinessDateService businessDateService,
+            ApplicationEventPublisher eventPublisher) {
         this.transactionRepository = transactionRepository;
         this.businessDateService = businessDateService;
+        this.eventPublisher = eventPublisher;
     }
 
     @Override
@@ -84,6 +89,13 @@ public class SipItemProcessor implements ItemProcessor<SipMandate, SipInstallmen
 
         log.info("SIP mandate {} | created PENDING transaction {} | businessDate {}",
                 mandate.getId(), transaction.getId(), transaction.getBusinessDate());
+
+        // Notify the investor, same as a manually-placed purchase (PurchaseService
+        // publishes this too) — this bean bypasses PurchaseService entirely, so it
+        // has to publish the event itself. Safe within the chunk-level transaction:
+        // SipBatchJobConfig wraps read→process→write in one transaction per chunk,
+        // so AFTER_COMMIT still fires once that chunk commits.
+        eventPublisher.publishEvent(new TransactionCreatedEvent(this, transaction));
 
         return SipInstallmentResult.succeeded(mandate, transaction.getId());
     }

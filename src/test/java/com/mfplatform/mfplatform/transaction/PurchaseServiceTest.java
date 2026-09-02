@@ -22,6 +22,9 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
+
+import com.mfplatform.mfplatform.notification.event.ApplicationEvents.TransactionCreatedEvent;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -55,6 +58,7 @@ class PurchaseServiceTest {
     @Mock private HoldingService            holdingService;
     @Mock private PurchaseValidationChain   validationChain;
     @Mock private BusinessDateService       businessDateService;
+    @Mock private ApplicationEventPublisher eventPublisher;
 
     @InjectMocks
     private PurchaseService purchaseService;
@@ -190,6 +194,18 @@ class PurchaseServiceTest {
             // on since those collaborators aren't even wired into this service
             // anymore; this test documents that the transaction is only saved once.
             verify(transactionRepository, times(1)).save(any());
+        }
+
+        @Test
+        @DisplayName("publishes TransactionCreatedEvent after saving the PENDING transaction")
+        void publishesTransactionCreatedEvent() {
+            purchaseService.createPurchase(request, actorContext);
+
+            ArgumentCaptor<TransactionCreatedEvent> eventCaptor =
+                    ArgumentCaptor.forClass(TransactionCreatedEvent.class);
+            verify(eventPublisher).publishEvent(eventCaptor.capture());
+
+            assertThat(eventCaptor.getValue().getTransaction()).isEqualTo(savedTransaction);
         }
     }
 

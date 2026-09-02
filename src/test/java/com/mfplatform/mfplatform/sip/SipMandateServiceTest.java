@@ -17,8 +17,11 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
+
+import com.mfplatform.mfplatform.notification.event.ApplicationEvents.SipMandateCreatedEvent;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -61,6 +64,7 @@ class SipMandateServiceTest {
     @Mock private CurrentUserResolver   currentUserResolver;
     @Mock private OwnershipValidator    ownershipValidator;
     @Mock private BusinessDateService   businessDateService;
+    @Mock private ApplicationEventPublisher eventPublisher;
     @Mock private Authentication        authentication;
 
     @InjectMocks
@@ -328,6 +332,19 @@ class SipMandateServiceTest {
             assertThat(captor.getValue().getMandateReference())
                     .startsWith("NACH-")
                     .hasSize(21); // NACH- (5) + 16 hex chars
+        }
+
+        @Test
+        @DisplayName("publishes SipMandateCreatedEvent with the computed scheduleDescription")
+        void publishesSipMandateCreatedEvent() {
+            sipMandateService.register(validRequest, authentication);
+
+            ArgumentCaptor<SipMandateCreatedEvent> eventCaptor =
+                    ArgumentCaptor.forClass(SipMandateCreatedEvent.class);
+            verify(eventPublisher).publishEvent(eventCaptor.capture());
+
+            assertThat(eventCaptor.getValue().getScheduleDescription())
+                    .isEqualTo("Deducted on the 15th of each month");
         }
 
         @Test

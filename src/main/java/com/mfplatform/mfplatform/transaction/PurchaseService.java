@@ -8,6 +8,7 @@ import com.mfplatform.mfplatform.folio.FolioRepository;
 import com.mfplatform.mfplatform.investor.Investor;
 import com.mfplatform.mfplatform.investor.InvestorNotFoundException;
 import com.mfplatform.mfplatform.investor.InvestorRepository;
+import com.mfplatform.mfplatform.notification.event.ApplicationEvents.TransactionCreatedEvent;
 import com.mfplatform.mfplatform.scheme.Scheme;
 import com.mfplatform.mfplatform.scheme.SchemeNotFoundException;
 import com.mfplatform.mfplatform.scheme.SchemeRepository;
@@ -16,6 +17,7 @@ import com.mfplatform.mfplatform.transaction.dto.TransactionDtos.*;
 import com.mfplatform.mfplatform.transaction.validation.PurchaseValidationChain;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -58,6 +60,7 @@ public class PurchaseService {
     private final HoldingService holdingService;
     private final PurchaseValidationChain validationChain;
     private final BusinessDateService businessDateService;
+    private final ApplicationEventPublisher eventPublisher;
 
     public PurchaseService(
             MfTransactionRepository transactionRepository,
@@ -66,7 +69,8 @@ public class PurchaseService {
             SchemeRepository schemeRepository,
             HoldingService holdingService,
             PurchaseValidationChain validationChain,
-            BusinessDateService businessDateService) {
+            BusinessDateService businessDateService,
+            ApplicationEventPublisher eventPublisher) {
         this.transactionRepository = transactionRepository;
         this.investorRepository = investorRepository;
         this.folioRepository = folioRepository;
@@ -74,6 +78,7 @@ public class PurchaseService {
         this.holdingService = holdingService;
         this.validationChain = validationChain;
         this.businessDateService = businessDateService;
+        this.eventPublisher = eventPublisher;
     }
 
     /**
@@ -138,6 +143,8 @@ public class PurchaseService {
 
         log.info("Created PENDING purchase transaction {} for folio {} scheme {} businessDate {}",
                 transaction.getId(), request.folioId(), request.schemeId(), transaction.getBusinessDate());
+
+        eventPublisher.publishEvent(new TransactionCreatedEvent(this, transaction));
 
         return toResponse(transaction);
     }
